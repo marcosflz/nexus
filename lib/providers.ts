@@ -5,6 +5,12 @@ export interface ProviderInfo {
   needsKey: boolean;
   defaultModel: string;
   placeholder?: string;
+  /**
+   * Endpoint OpenAI-compatible de listado (`GET` con `Authorization: Bearer`).
+   * Es una constante nuestra, nunca algo que venga del usuario: la ruta que lo
+   * consume no debe poder apuntar a un host arbitrario.
+   */
+  modelsUrl?: string;
 }
 
 export const PROVIDERS: ProviderInfo[] = [
@@ -15,6 +21,7 @@ export const PROVIDERS: ProviderInfo[] = [
     needsKey: true,
     defaultModel: "anthropic/claude-sonnet-4.6",
     placeholder: "sk-or-v1-...",
+    modelsUrl: "https://openrouter.ai/api/v1/models",
   },
   {
     id: "openai-api",
@@ -23,6 +30,7 @@ export const PROVIDERS: ProviderInfo[] = [
     needsKey: true,
     defaultModel: "gpt-5.5",
     placeholder: "sk-...",
+    modelsUrl: "https://api.openai.com/v1/models",
   },
   {
     id: "anthropic",
@@ -65,6 +73,7 @@ export const PROVIDERS: ProviderInfo[] = [
     needsKey: true,
     defaultModel: "claude-haiku-5-5",
     placeholder: "clave de opencode.ai/console/go",
+    modelsUrl: "https://opencode.ai/zen/go/v1/models",
   },
 ];
 

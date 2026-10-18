@@ -27,11 +27,12 @@ export async function GET() {
     .limit(1);
 
   return NextResponse.json({
-    providers: PROVIDERS.map(({ id, label, needsKey, defaultModel }) => ({
+    providers: PROVIDERS.map(({ id, label, needsKey, defaultModel, modelsUrl }) => ({
       id,
       label,
       needsKey,
       defaultModel,
+      canListModels: Boolean(modelsUrl),
     })),
     credential: row
       ? {

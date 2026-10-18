@@ -10,6 +10,7 @@ import {
 import { ChatThread } from "./thread";
 import { Sidebar } from "./sidebar";
 import { OPENUI_TOOL_NAME, splitOpenUiBlocks } from "@/lib/openui/blocks";
+import { randomId } from "@/lib/uuid";
 import type {
   PendingAttachment,
   ThreadSummary,
@@ -148,7 +149,7 @@ export function ChatApp({
       setMessages((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "user",
           content: text,
           tools: [],
@@ -159,7 +160,7 @@ export function ChatApp({
         },
       ]);
 
-      const assistantId = crypto.randomUUID();
+      const assistantId = randomId();
       setMessages((prev) => [
         ...prev,
         {
