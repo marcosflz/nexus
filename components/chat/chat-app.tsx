@@ -9,6 +9,7 @@ import {
 } from "@assistant-ui/react";
 import { ChatThread } from "./thread";
 import { Sidebar } from "./sidebar";
+import { OPENUI_TOOL_NAME, splitOpenUiBlocks } from "@/lib/openui/blocks";
 import type {
   PendingAttachment,
   ThreadSummary,
@@ -77,6 +78,7 @@ export function ChatApp({
   const [isRunning, setIsRunning] = useState(false);
   const [focus, setFocus] = useState("web");
   const [mode, setMode] = useState<"search" | "research">("search");
+  const [uiMode, setUiMode] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -197,6 +199,7 @@ export function ChatApp({
             text,
             focus: sentFocus,
             mode: sentMode,
+            ui: uiMode || undefined,
             attachments: attachments.length > 0 ? attachments : undefined,
           }),
           signal: controller.signal,
@@ -289,7 +292,7 @@ export function ChatApp({
         setIsRunning(false);
       }
     },
-    [currentThreadId, refreshThreads, pendingAttachments, focus, mode],
+    [currentThreadId, refreshThreads, pendingAttachments, focus, mode, uiMode],
   );
 
   const convertMessage = useCallback((message: UiMessage): ThreadMessageLike => {
@@ -300,19 +303,65 @@ export function ChatApp({
         text: message.attachments.map((attachment) => `📎 ${attachment.name}`).join("  "),
       });
     }
+
+    // Herramientas del agente: van antes del texto, como indicador de progreso.
     for (const tool of message.tools) {
+      if (tool.kind === "openui") continue;
       content.push({
         type: "tool-call",
         toolCallId: tool.id,
         toolName: tool.name,
         args: tool.input ?? {},
-        argsText: JSON.stringify(tool.input ?? {}),
+        argsText: tool.argsText ?? JSON.stringify(tool.input ?? {}),
         result: tool.status === "complete" ? "" : undefined,
       });
     }
-    if (message.content) {
-      content.push({ type: "text", text: message.content });
+
+    // Prosa, recortando los bloques de UI que pueda haber dentro del texto.
+    const segments = splitOpenUiBlocks(message.content);
+    const prose = segments
+      .filter((segment): segment is Extract<typeof segment, { type: "text" }> => segment.type === "text")
+      .map((segment) => segment.text)
+      .join("")
+      .replace(/\n{3,}/g, "\n\n");
+
+    if (prose) {
+      content.push({ type: "text", text: prose });
     }
+
+    // La UI generativa va después de la prosa: primero se lee la respuesta.
+    // Si el mensaje viene de la base de datos, el bloque ya está como tool
+    // persistida; si viene del stream, se extrae del texto en vivo.
+    const persistedOpenUi = message.tools.filter((tool) => tool.kind === "openui");
+    const openUiParts =
+      persistedOpenUi.length > 0
+        ? persistedOpenUi.map((tool) => ({
+            id: tool.id,
+            program: String((tool.input as { ui?: string } | undefined)?.ui ?? ""),
+            closed: tool.status === "complete",
+          }))
+        : segments
+            .filter(
+              (segment): segment is Extract<typeof segment, { type: "openui" }> =>
+                segment.type === "openui",
+            )
+            .map((segment) => ({
+              id: `openui-${segment.index}`,
+              program: segment.program,
+              closed: segment.closed,
+            }));
+
+    for (const block of openUiParts) {
+      content.push({
+        type: "tool-call",
+        toolCallId: block.id,
+        toolName: OPENUI_TOOL_NAME,
+        args: { ui: block.program },
+        argsText: JSON.stringify({ ui: block.program }),
+        result: block.closed ? "" : undefined,
+      });
+    }
+
     if (message.error) {
       content.push({ type: "text", text: `\n\n> ⚠️ ${message.error}` });
     }
@@ -389,8 +438,10 @@ export function ChatApp({
           <ChatThread
             focus={focus}
             mode={mode}
+            uiEnabled={uiMode}
             onFocusChange={setFocus}
             onModeChange={setMode}
+            onUiChange={setUiMode}
             attachments={pendingAttachments}
             uploading={uploading}
             uploadError={uploadError}

@@ -20,6 +20,11 @@ export interface PersistedTool {
   id: string;
   name: string;
   input?: unknown;
+  argsText?: string;
+  /** `openui` marca un bloque de UI generativa extraído del texto. */
+  kind?: "tool" | "openui";
+  /** El programa OpenUI no pasó la validación: no se renderiza como UI. */
+  invalid?: boolean;
   status: "running" | "complete" | "error";
   durationMs?: number;
 }

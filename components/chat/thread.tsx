@@ -9,6 +9,8 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import { FOCUS_OPTIONS } from "@/lib/focus";
+import { OPENUI_TOOL_NAME } from "@/lib/openui/blocks";
+import { OpenUIPresentTool } from "./openui";
 import { ToolCard, WebExtractTool, WebSearchTool } from "./tools";
 import type { PendingAttachment } from "./types";
 
@@ -76,6 +78,7 @@ function AssistantMessage() {
               by_name: {
                 web_search: WebSearchTool,
                 web_extract: WebExtractTool,
+                [OPENUI_TOOL_NAME]: OpenUIPresentTool,
               },
             },
           }}
@@ -100,8 +103,10 @@ function EmptyState() {
 export interface ChatThreadProps {
   focus: string;
   mode: "search" | "research";
+  uiEnabled: boolean;
   onFocusChange: (focus: string) => void;
   onModeChange: (mode: "search" | "research") => void;
+  onUiChange: (enabled: boolean) => void;
   attachments: PendingAttachment[];
   uploading: boolean;
   uploadError: string | null;
@@ -112,8 +117,10 @@ export interface ChatThreadProps {
 export function ChatThread({
   focus,
   mode,
+  uiEnabled,
   onFocusChange,
   onModeChange,
+  onUiChange,
   attachments,
   uploading,
   uploadError,
@@ -199,6 +206,18 @@ export function ChatThread({
                 Research
               </button>
             </div>
+            <button
+              onClick={() => onUiChange(!uiEnabled)}
+              title="Respuestas con interfaz (mapas, gráficos, tablas, formularios)"
+              aria-pressed={uiEnabled}
+              className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                uiEnabled
+                  ? "border-sky-500/60 bg-sky-500/10 text-sky-300"
+                  : "border-neutral-800 text-neutral-400 hover:border-neutral-600"
+              }`}
+            >
+              Interfaz
+            </button>
           </div>
 
           <ComposerPrimitive.Root className="flex w-full items-end gap-2">

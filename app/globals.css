@@ -1,4 +1,12 @@
+/*
+ * Capas: OpenUI se coloca por encima del reset de Tailwind y por debajo de
+ * nuestros componentes y utilidades, para que el tema de Plexo mande.
+ */
+@layer theme, base, openui, components, utilities;
+
 @import "tailwindcss";
+@import "@openuidev/react-ui/layered/styles/index.css";
+@import "./tokens.css";
 
 html,
 body {
@@ -6,10 +14,11 @@ body {
 }
 
 body {
-  background: #0a0a0b;
-  color: #e7e7ea;
+  background: var(--bg);
+  color: var(--fg);
 }
 
+/* Prosa del asistente */
 .aui-md {
   line-height: 1.65;
   font-size: 0.95rem;
@@ -39,7 +48,7 @@ body {
 }
 
 .aui-md a {
-  color: #7dd3fc;
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -55,17 +64,17 @@ body {
 }
 
 .aui-md code {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in oklab, var(--fg) 8%, transparent);
   padding: 0.1rem 0.3rem;
   border-radius: 0.25rem;
   font-size: 0.85em;
 }
 
 .aui-md pre {
-  background: #111113;
-  border: 1px solid #26262b;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   padding: 0.75rem;
-  border-radius: 0.5rem;
+  border-radius: var(--radius-sm);
   overflow-x: auto;
 }
 
@@ -75,9 +84,9 @@ body {
 }
 
 .aui-md blockquote {
-  border-left: 3px solid #3f3f46;
+  border-left: 3px solid var(--border-strong);
   padding-left: 0.75rem;
-  color: #a1a1aa;
+  color: var(--muted-fg);
 }
 
 .aui-md table {
@@ -87,7 +96,17 @@ body {
 
 .aui-md th,
 .aui-md td {
-  border: 1px solid #2a2a30;
+  border: 1px solid var(--border);
   padding: 0.35rem 0.5rem;
   text-align: left;
+}
+
+/* Superficies de la UI generativa dentro del hilo */
+.plexo-openui {
+  margin-top: 0.75rem;
+}
+
+.plexo-openui pre,
+.plexo-openui code {
+  font-family: var(--font-mono, ui-monospace, monospace);
 }

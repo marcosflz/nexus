@@ -12,8 +12,11 @@ import {
 import { getCurrentUser } from "@/lib/auth";
 import { decryptSecret } from "@/lib/crypto";
 import { runHermesTurn } from "@/lib/hermes/runner";
+import { buildPrompt } from "@/lib/hermes/prompts";
 import { buildSources, type SourceItem } from "@/lib/sources";
-import { focusInstruction, researchInstruction } from "@/lib/focus";
+import { OPENUI_TOOL_NAME, splitOpenUiBlocks } from "@/lib/openui/blocks";
+import { openuiToolsEnabled } from "@/lib/openui/prompt";
+import { validateOpenUiProgram } from "@/lib/openui/validate";
 
 export const runtime = "nodejs";
 export const maxDuration = 900;
@@ -31,33 +34,50 @@ const bodySchema = z.object({
   focus: z.enum(["web", "academic", "reddit", "finance", "news"]).optional(),
   mode: z.enum(["search", "research"]).optional(),
   attachments: z.array(attachmentSchema).max(5).optional(),
+  /** El usuario ha pedido expresamente una respuesta con interfaz. */
+  ui: z.boolean().optional(),
 });
 
 const MAX_TOOL_OUTPUT = 200_000;
 const RESEARCH_MAX_TURNS = 40;
 
-function buildPrompt(
-  text: string,
-  focus: string | undefined,
-  mode: string | undefined,
-  attachments: z.infer<typeof attachmentSchema>[],
-): string {
-  const blocks: string[] = [];
+/**
+ * Convierte el texto final del asistente en prosa + entradas de tool.
+ *
+ * Los bloques OpenUI cerrados y válidos se guardan como tool parts para que el
+ * renderer los pinte sin re-parsear nada al recargar. Un bloque inválido no se
+ * descarta: se devuelve a la prosa como código, que es mejor que un hueco.
+ */
+function splitOpenUiResult(text: string): { content: string; tools: PersistedTool[] } {
+  const prose: string[] = [];
+  const tools: PersistedTool[] = [];
 
-  if (mode === "research") blocks.push(researchInstruction());
-
-  const focusText = focus ? focusInstruction(focus) : null;
-  if (focusText) blocks.push(focusText);
-
-  if (attachments.length > 0) {
-    const documents = attachments
-      .map((attachment) => `--- ${attachment.name} ---\n${attachment.text}`)
-      .join("\n\n");
-    blocks.push(`Documentos adjuntos por el usuario (ya extraídos):\n\n${documents}`);
+  for (const segment of splitOpenUiBlocks(text)) {
+    if (segment.type === "text") {
+      prose.push(segment.text);
+      continue;
+    }
+    if (!segment.closed) {
+      prose.push(`\`\`\`openui\n${segment.program}\n\`\`\`\n`);
+      continue;
+    }
+    const validation = validateOpenUiProgram(segment.program);
+    if (validation.ok) {
+      tools.push({
+        id: `openui-${segment.index}`,
+        name: OPENUI_TOOL_NAME,
+        kind: "openui",
+        input: { ui: segment.program },
+        argsText: JSON.stringify({ ui: segment.program }),
+        status: "complete",
+      });
+    } else {
+      console.warn("[plexo] bloque OpenUI descartado:", validation.error);
+      prose.push(`\`\`\`openui\n${segment.program}\n\`\`\`\n`);
+    }
   }
 
-  blocks.push(text);
-  return blocks.join("\n\n");
+  return { content: prose.join("").replace(/\n{3,}/g, "\n\n"), tools };
 }
 
 export async function POST(req: NextRequest) {
@@ -68,7 +88,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return Response.json({ error: "Petición no válida" }, { status: 400 });
   }
-  const { threadId, text, focus, mode, attachments = [] } = parsed.data;
+  const { threadId, text, focus, mode, attachments = [], ui } = parsed.data;
 
   const [thread] = await db
     .select()
@@ -120,7 +140,8 @@ export async function POST(req: NextRequest) {
     })
     .where(eq(threads.id, threadId));
 
-  const prompt = buildPrompt(text, focus, mode, attachments);
+  const openui = openuiToolsEnabled({ focus, mode, userToggle: ui === true });
+  const prompt = buildPrompt({ text, focus, mode, attachments, openui });
   const encoder = new TextEncoder();
   const toolOutputs: string[] = [];
   const toolStates: PersistedTool[] = [];
@@ -208,14 +229,15 @@ export async function POST(req: NextRequest) {
         }
 
         const sources: SourceItem[] = buildSources(result.text, toolOutputs);
+        const { content, tools: openuiTools } = splitOpenUiResult(result.text);
         const [assistantMessage] = await db
           .insert(messages)
           .values({
             threadId,
             role: "assistant",
-            content: result.text,
+            content,
             sources,
-            tools: toolStates,
+            tools: [...toolStates, ...openuiTools],
             usage: result.usage ?? usage ?? null,
           })
           .returning({ id: messages.id });
