@@ -1,0 +1,12 @@
+use_default_settings: true
+
+server:
+  # Cambia este secreto en despliegues reales.
+  secret_key: "cambia-esta-clave-en-produccion"
+  image_proxy: true
+
+search:
+  # Hermes usa la API JSON de SearXNG (deshabilitada por defecto).
+  formats:
+    - html
+    - json

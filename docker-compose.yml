@@ -1,0 +1,62 @@
+name: plexo
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    container_name: plexo-app
+    init: true
+    restart: unless-stopped
+    command: ["bash", "/app/docker/start-web.sh"]
+    ports:
+      # Puerto del host configurable: APP_PORT=3010 docker compose up -d
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://plexo:plexo@db:5432/plexo
+      SEARXNG_URL: http://searxng:8080
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      HERMES_HOME: /opt/data
+    volumes:
+      - hermes-data:/opt/data
+    depends_on:
+      db:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+
+  db:
+    image: postgres:18-alpine
+    container_name: plexo-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: plexo
+      POSTGRES_PASSWORD: plexo
+      POSTGRES_DB: plexo
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      # Postgres 18+ espera el volumen en /var/lib/postgresql (no .../data).
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plexo -d plexo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: plexo-searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+
+volumes:
+  hermes-data:
+  db-data:
