@@ -10,9 +10,11 @@ ENV NODE_ENV=production \
     HERMES_HOME=/opt/data \
     HERMES_BIN=/opt/hermes/.venv/bin/hermes
 
-COPY package.json ./
+COPY package.json .npmrc ./
 # --include=dev: la imagen base define NODE_ENV=production y npm omitiría
 # tailwind/typescript, necesarios para `next build`.
+# El .npmrc debe estar presente ANTES del install: fija legacy-peer-deps, sin lo
+# cual npm aborta por el conflicto zustand 4 (OpenUI) / zustand 5 (assistant-ui).
 RUN npm install --include=dev --no-audit --no-fund
 
 COPY . .
