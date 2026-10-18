@@ -55,6 +55,17 @@ export const PROVIDERS: ProviderInfo[] = [
     defaultModel: "local-model",
     placeholder: "opcional",
   },
+  {
+    // Hermes trae este proveedor de serie (plugin `opencode-zen`), con endpoint
+    // propio. Ojo: la variable NO es OPENCODE_API_KEY (la genérica de models.dev)
+    // sino OPENCODE_GO_API_KEY; si se usa la otra, la petición sale sin clave.
+    id: "opencode-go",
+    label: "OpenCode Go",
+    envVar: "OPENCODE_GO_API_KEY",
+    needsKey: true,
+    defaultModel: "claude-haiku-5-5",
+    placeholder: "clave de opencode.ai/console/go",
+  },
 ];
 
 export function getProvider(id: string): ProviderInfo | undefined {
