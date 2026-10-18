@@ -1,4 +1,5 @@
 import {
+  integer,
   pgTable,
   text,
   timestamp,
@@ -7,6 +8,7 @@ import {
 } from "drizzle-orm/pg-core";
 import type { SourceItem } from "@/lib/sources";
 import type { HermesTokens } from "@/lib/hermes/events";
+import type { ActionKind, PolicyEffect } from "@/lib/policy/types";
 
 export interface MessageAttachmentMeta {
   name: string;
@@ -71,5 +73,82 @@ export const messages = pgTable("messages", {
   tools: jsonb("tools").$type<PersistedTool[]>(),
   attachments: jsonb("attachments").$type<MessageAttachmentMeta[]>(),
   usage: jsonb("usage").$type<HermesTokens>(),
+  runId: uuid("run_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Un turno. Guarda el ciclo de vida y el punto de reanudación para que
+ * recargar a mitad de respuesta no pierda el trabajo hecho.
+ */
+export const runs = pgTable("runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  threadId: uuid("thread_id")
+    .notNull()
+    .references(() => threads.id, { onDelete: "cascade" }),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("running"),
+  agentSessionId: text("agent_session_id"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+  lastSeq: integer("last_seq").notNull().default(0),
+  prompt: text("prompt"),
+  error: text("error"),
+  usage: jsonb("usage").$type<HermesTokens>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Log append-only de eventos AG-UI de un run. Es lo que permite el replay. */
+export const runEvents = pgTable("run_events", {
+  runId: uuid("run_id")
+    .notNull()
+    .references(() => runs.id, { onDelete: "cascade" }),
+  seq: integer("seq").notNull(),
+  type: text("type").notNull(),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Registro de cada acción del agente: qué se permitió, qué se negó y qué regla
+ * lo decidió. Se escribe **antes** de aplicar el efecto.
+ */
+export const actionAudit = pgTable("action_audit", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  threadId: uuid("thread_id").references(() => threads.id, { onDelete: "set null" }),
+  runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+  tool: text("tool").notNull(),
+  kind: text("kind").$type<ActionKind>().notNull(),
+  effect: text("effect").$type<PolicyEffect>().notNull(),
+  rule: text("rule").notNull(),
+  reason: text("reason"),
+  target: jsonb("target"),
+  args: jsonb("args"),
+  result: jsonb("result"),
+  durationMs: integer("duration_ms"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Acciones que esperan (o esperaron) una decisión humana explícita. */
+export const approvals = pgTable("approvals", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id")
+    .notNull()
+    .references(() => runs.id, { onDelete: "cascade" }),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  tool: text("tool").notNull(),
+  args: jsonb("args"),
+  rule: text("rule").notNull(),
+  reason: text("reason"),
+  status: text("status").notNull().default("pending"),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

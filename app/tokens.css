@@ -1,0 +1,127 @@
+/*
+ * Tokens de diseño de Plexo.
+ *
+ * Tailwind v4 es CSS-first: las variables se declaran aquí y se mapean con
+ * `@theme inline` para que existan utilidades como `bg-surface` o `text-muted-fg`.
+ * Todo se define con OKLCH para que el modo oscuro no sea un simple invertido.
+ */
+
+:root {
+  --bg: oklch(0.985 0.003 265);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.972 0.004 265);
+  --surface-3: oklch(0.955 0.006 265);
+  --border: oklch(0.912 0.006 265);
+  --border-strong: oklch(0.86 0.008 265);
+  --fg: oklch(0.22 0.014 265);
+  --fg-soft: oklch(0.38 0.012 265);
+  --muted-fg: oklch(0.55 0.012 265);
+  --accent: oklch(0.56 0.16 265);
+  --accent-hover: oklch(0.51 0.17 265);
+  --accent-fg: oklch(0.99 0 0);
+  --accent-soft: oklch(0.95 0.03 265);
+  --success: oklch(0.62 0.15 152);
+  --warning: oklch(0.74 0.15 75);
+  --danger: oklch(0.58 0.20 25);
+  --ring: oklch(0.62 0.15 265);
+
+  --chart-1: oklch(0.62 0.17 265);
+  --chart-2: oklch(0.66 0.15 200);
+  --chart-3: oklch(0.70 0.15 152);
+  --chart-4: oklch(0.78 0.15 85);
+  --chart-5: oklch(0.68 0.17 330);
+  --chart-6: oklch(0.64 0.18 25);
+
+  --radius-sm: 8px;
+  --radius: 14px;
+  --radius-lg: 20px;
+  --radius-full: 999px;
+
+  --shadow-1: 0 1px 2px color-mix(in oklab, var(--fg) 8%, transparent);
+  --shadow-2:
+    0 2px 4px color-mix(in oklab, var(--fg) 6%, transparent),
+    0 8px 24px color-mix(in oklab, var(--fg) 8%, transparent);
+  --shadow-3:
+    0 4px 8px color-mix(in oklab, var(--fg) 8%, transparent),
+    0 16px 48px color-mix(in oklab, var(--fg) 14%, transparent);
+
+  --duration: 150ms;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --sidebar-width: 280px;
+  --panel-width: 360px;
+}
+
+.dark {
+  --bg: oklch(0.16 0.008 265);
+  --surface: oklch(0.19 0.010 265);
+  --surface-2: oklch(0.225 0.011 265);
+  --surface-3: oklch(0.265 0.012 265);
+  --border: oklch(0.29 0.012 265);
+  --border-strong: oklch(0.38 0.014 265);
+  --fg: oklch(0.95 0.006 265);
+  --fg-soft: oklch(0.82 0.010 265);
+  --muted-fg: oklch(0.66 0.012 265);
+  --accent: oklch(0.68 0.15 265);
+  --accent-hover: oklch(0.74 0.15 265);
+  --accent-fg: oklch(0.16 0.02 265);
+  --accent-soft: oklch(0.28 0.05 265);
+  --success: oklch(0.72 0.15 152);
+  --warning: oklch(0.80 0.14 80);
+  --danger: oklch(0.68 0.19 25);
+  --ring: oklch(0.70 0.14 265);
+
+  --chart-1: oklch(0.72 0.16 265);
+  --chart-2: oklch(0.74 0.13 200);
+  --chart-3: oklch(0.76 0.14 152);
+  --chart-4: oklch(0.82 0.14 85);
+  --chart-5: oklch(0.76 0.16 330);
+  --chart-6: oklch(0.72 0.17 25);
+
+  --shadow-1: 0 1px 2px oklch(0 0 0 / 0.4);
+  --shadow-2: 0 2px 4px oklch(0 0 0 / 0.3), 0 8px 24px oklch(0 0 0 / 0.4);
+  --shadow-3: 0 4px 8px oklch(0 0 0 / 0.35), 0 16px 48px oklch(0 0 0 / 0.5);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-fg-soft: var(--fg-soft);
+  --color-muted-fg: var(--muted-fg);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+
+  --radius-sm: var(--radius-sm);
+  --radius-DEFAULT: var(--radius);
+  --radius-lg: var(--radius-lg);
+
+  --shadow-1: var(--shadow-1);
+  --shadow-2: var(--shadow-2);
+  --shadow-3: var(--shadow-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
