@@ -1,112 +1,284 @@
 "use client";
 
+import { useState } from "react";
 import {
+  ActionBarPrimitive,
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
   useAuiState,
 } from "@assistant-ui/react";
-import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
-import remarkGfm from "remark-gfm";
-import { FOCUS_OPTIONS } from "@/lib/focus";
-import { OPENUI_TOOL_NAME } from "@/lib/openui/blocks";
-import { OpenUIPresentTool } from "./openui";
-import { ToolCard, WebExtractTool, WebSearchTool } from "./tools";
+import {
+  Copy,
+  FileText,
+  Folder,
+  ListTree,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  ThumbsDown,
+  ThumbsUp,
+  X,
+} from "lucide-react";
+import { NexusLogo } from "@/components/brand/logo";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import { useChatActions, type MessageCustom } from "./chat-context";
+import { Composer } from "./composer";
+import {
+  ApprovalCards,
+  AssistantText,
+  HiddenTool,
+  ReasoningPart,
+  RunSteps,
+  SourcesList,
+  SourcesProvider,
+  UserText,
+  useMessageSources,
+} from "./message-parts";
+import { OPENUI_PROMPT_TOOL_NAME, OPENUI_TOOL_NAME, OpenUIPresentTool, OpenUIPromptTool } from "./openui";
 import type { PendingAttachment } from "./types";
 
-const MarkdownText = () => (
-  <MarkdownTextPrimitive remarkPlugins={[remarkGfm]} className="aui-md" />
-);
-
-const ReasoningBlock = () => {
-  const text = useAuiState((state) =>
-    state.part.type === "reasoning" ? state.part.text : "",
-  );
-  if (!text) return null;
+function UserAttachments() {
+  const custom = useAuiState((state) => state.message.metadata?.custom) as MessageCustom | undefined;
+  const files = custom?.attachments ?? [];
+  if (files.length === 0) return null;
   return (
-    <details className="my-2 rounded-lg border border-neutral-800 bg-neutral-950/60 px-3 py-2 text-sm text-neutral-400">
-      <summary className="cursor-pointer select-none text-xs uppercase tracking-wide text-neutral-500">
-        Razonamiento
-      </summary>
-      <div className="mt-2 whitespace-pre-wrap">{text}</div>
-    </details>
-  );
-};
-
-const SourceChip = () => {
-  const source = useAuiState((state) =>
-    state.part.type === "source" ? state.part : null,
-  );
-  if (!source || source.sourceType !== "url") return null;
-  return (
-    <a
-      href={source.url}
-      target="_blank"
-      rel="noreferrer noopener"
-      title={source.url}
-      className="mr-1.5 mt-1.5 inline-flex max-w-full items-center gap-1.5 rounded-full border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-neutral-600"
-    >
-      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-neutral-800 text-[10px] text-neutral-400">
-        {source.id}
-      </span>
-      <span className="truncate">{source.title ?? source.url}</span>
-    </a>
-  );
-};
-
-function UserMessage() {
-  return (
-    <MessagePrimitive.Root className="flex justify-end">
-      <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-neutral-800 px-4 py-2.5">
-        <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
-      </div>
-    </MessagePrimitive.Root>
-  );
-}
-
-function AssistantMessage() {
-  return (
-    <MessagePrimitive.Root className="flex flex-col">
-      <div className="max-w-full">
-        <MessagePrimitive.Parts
-          components={{
-            Text: MarkdownText,
-            Reasoning: ReasoningBlock,
-            Source: SourceChip,
-            tools: {
-              Fallback: ToolCard,
-              by_name: {
-                web_search: WebSearchTool,
-                web_extract: WebExtractTool,
-                [OPENUI_TOOL_NAME]: OpenUIPresentTool,
-              },
-            },
-          }}
-        />
-      </div>
-    </MessagePrimitive.Root>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      <h1 className="text-3xl font-semibold tracking-tight">Plexo</h1>
-      <p className="max-w-md text-sm text-neutral-400">
-        Pregunta lo que quieras: Plexo busca en la web, lee las fuentes y responde
-        con citas verificables.
-      </p>
+    <div className="mt-2 flex flex-wrap justify-end gap-2">
+      {files.map((file, index) => (
+        <span
+          key={`${file.name}-${index}`}
+          className="border-border bg-surface-2 inline-flex max-w-60 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs"
+        >
+          <FileText className="size-3.5 shrink-0" />
+          <span className="truncate">{file.name}</span>
+        </span>
+      ))}
     </div>
   );
 }
 
+const TIME_FORMAT = new Intl.DateTimeFormat("es-ES", { hour: "2-digit", minute: "2-digit" });
+
+function MessageTime() {
+  const createdAt = useAuiState((state) => state.message.createdAt);
+  if (!createdAt) return null;
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return null;
+  return (
+    <time dateTime={date.toISOString()} className="text-muted-fg mr-1 text-[12px] tabular-nums">
+      {TIME_FORMAT.format(date)}
+    </time>
+  );
+}
+
+/** Mensaje del usuario: burbuja a la derecha; hora, editar y copiar al pasar el ratón. */
+function UserMessage() {
+  return (
+    <MessagePrimitive.Root className="group animate-in fade-in-0 slide-in-from-bottom-1 flex flex-col items-end pt-10 duration-300 first:pt-2">
+      <div className="flex w-full items-start justify-end gap-2">
+        <ActionBarPrimitive.Root
+          hideWhenRunning
+          className="mt-2 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+        >
+          <MessageTime />
+          <ActionBarPrimitive.Edit asChild>
+            <Button variant="ghost" size="icon-sm" className="text-muted-fg rounded-full" aria-label="Editar pregunta">
+              <Pencil className="size-3.5" />
+            </Button>
+          </ActionBarPrimitive.Edit>
+          <ActionBarPrimitive.Copy asChild>
+            <Button variant="ghost" size="icon-sm" className="text-muted-fg rounded-full" aria-label="Copiar pregunta">
+              <Copy className="size-3.5" />
+            </Button>
+          </ActionBarPrimitive.Copy>
+        </ActionBarPrimitive.Root>
+        <div className="bg-surface-2 text-fg max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-relaxed break-words sm:max-w-[75%]">
+          <MessagePrimitive.Parts components={{ Text: UserText }} />
+        </div>
+      </div>
+      <UserAttachments />
+    </MessagePrimitive.Root>
+  );
+}
+
+function EditComposer() {
+  return (
+    <MessagePrimitive.Root className="pt-10 first:pt-2">
+      <ComposerPrimitive.Root className="border-border-strong bg-surface flex w-full flex-col gap-2 rounded-2xl border p-3">
+        <ComposerPrimitive.Input
+          autoFocus
+          className="max-h-60 min-h-12 w-full resize-none bg-transparent px-1 py-1 text-[15px] outline-none"
+        />
+        <div className="flex justify-end gap-2">
+          <ComposerPrimitive.Cancel asChild>
+            <Button variant="ghost" size="sm" className="rounded-full">
+              Cancelar
+            </Button>
+          </ComposerPrimitive.Cancel>
+          <ComposerPrimitive.Send asChild>
+            <Button size="sm" className="rounded-full">
+              Enviar
+            </Button>
+          </ComposerPrimitive.Send>
+        </div>
+      </ComposerPrimitive.Root>
+    </MessagePrimitive.Root>
+  );
+}
+
+function Related() {
+  const custom = useAuiState((state) => state.message.metadata?.custom) as MessageCustom | undefined;
+  const running = useAuiState((state) => state.message.status?.type === "running");
+  const isLast = useAuiState((state) => state.message.isLast);
+  const actions = useChatActions();
+  const questions = custom?.followups ?? [];
+  if (running || !isLast || questions.length === 0) return null;
+
+  return (
+    <section className="mt-8">
+      <h3 className="mb-1 flex items-center gap-2 text-[18px] font-medium">
+        <ListTree className="size-5" /> Relacionado
+      </h3>
+      <ul className="divide-border border-border divide-y border-t">
+        {questions.map((question) => (
+          <li key={question}>
+            <button
+              type="button"
+              disabled={actions.isRunning}
+              onClick={() => actions.send(question)}
+              className="text-fg hover:text-brand flex w-full items-center justify-between gap-4 py-3 text-left text-[15px] transition-colors disabled:opacity-50"
+            >
+              <span>{question}</span>
+              <Plus className="text-brand size-4 shrink-0" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function MessageActions() {
+  const custom = useAuiState((state) => state.message.metadata?.custom) as MessageCustom | undefined;
+  const actions = useChatActions();
+  const serverId = custom?.serverId;
+  const rating = custom?.rating ?? null;
+
+  return (
+    <ActionBarPrimitive.Root
+      hideWhenRunning
+      autohide="not-last"
+      className="text-muted-fg mt-5 flex items-center justify-between"
+    >
+      <div className="flex items-center gap-1">
+        <ActionBarPrimitive.Reload asChild>
+          <Button variant="ghost" size="icon-sm" className="rounded-full" aria-label="Reescribir respuesta">
+            <RefreshCw className="size-4" />
+          </Button>
+        </ActionBarPrimitive.Reload>
+        <ActionBarPrimitive.Copy asChild>
+          <Button variant="ghost" size="icon-sm" className="rounded-full" aria-label="Copiar respuesta">
+            <Copy className="size-4" />
+          </Button>
+        </ActionBarPrimitive.Copy>
+      </div>
+      {serverId ? (
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={cn("rounded-full", rating === 1 && "text-brand")}
+            aria-label="Respuesta útil"
+            aria-pressed={rating === 1}
+            onClick={() => actions.rate(serverId, rating === 1 ? null : 1)}
+          >
+            <ThumbsUp className={cn("size-4", rating === 1 && "fill-current")} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={cn("rounded-full", rating === -1 && "text-brand")}
+            aria-label="Respuesta no útil"
+            aria-pressed={rating === -1}
+            onClick={() => actions.rate(serverId, rating === -1 ? null : -1)}
+          >
+            <ThumbsDown className={cn("size-4", rating === -1 && "fill-current")} />
+          </Button>
+        </div>
+      ) : null}
+    </ActionBarPrimitive.Root>
+  );
+}
+
+function AssistantMessage() {
+  const sources = useMessageSources();
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  return (
+    <MessagePrimitive.Root className="animate-in fade-in-0 mt-5 flex flex-col duration-300">
+      <SourcesProvider value={sources}>
+        <RunSteps sourcesOpen={sourcesOpen} onToggleSources={() => setSourcesOpen((open) => !open)} />
+        {sourcesOpen && sources.length > 0 ? (
+          <div className="border-border bg-surface animate-in fade-in-0 mb-5 max-h-96 overflow-y-auto rounded-xl border px-4 duration-200">
+            <SourcesList />
+          </div>
+        ) : null}
+        <MessagePrimitive.Parts
+          components={{
+            Text: AssistantText,
+            Reasoning: ReasoningPart,
+            Source: () => null,
+            tools: {
+              Fallback: HiddenTool,
+              by_name: {
+                [OPENUI_TOOL_NAME]: OpenUIPresentTool,
+                [OPENUI_PROMPT_TOOL_NAME]: OpenUIPromptTool,
+              },
+            },
+          }}
+        />
+        <ApprovalCards />
+        <MessageActions />
+        <Related />
+      </SourcesProvider>
+    </MessagePrimitive.Root>
+  );
+}
+
+export interface BackendOption {
+  id: string;
+  label: string;
+  available: boolean;
+}
+
+export interface AgentOption {
+  id: string;
+  name: string;
+  avatar: string;
+}
+
 export interface ChatThreadProps {
+  isEmpty: boolean;
+  loading: boolean;
+  agentName?: string;
+  projectName: string | null;
+  onClearProject: () => void;
+  modelLabel: string | null;
+  starters?: string[];
+  agents: AgentOption[];
+  agentId: string | null;
+  onAgentChange: (agentId: string | null) => void;
   focus: string;
   mode: "search" | "research";
   uiEnabled: boolean;
+  backend: string;
+  backends: BackendOption[];
   onFocusChange: (focus: string) => void;
   onModeChange: (mode: "search" | "research") => void;
   onUiChange: (enabled: boolean) => void;
+  onBackendChange: (backend: string) => void;
   attachments: PendingAttachment[];
   uploading: boolean;
   uploadError: string | null;
@@ -114,145 +286,80 @@ export interface ChatThreadProps {
   onRemoveAttachment: (index: number) => void;
 }
 
-export function ChatThread({
-  focus,
-  mode,
-  uiEnabled,
-  onFocusChange,
-  onModeChange,
-  onUiChange,
-  attachments,
-  uploading,
-  uploadError,
-  onFilesSelected,
-  onRemoveAttachment,
-}: ChatThreadProps) {
+export function ChatThread(props: ChatThreadProps) {
+  const actions = useChatActions();
+  const starters = props.starters ?? [];
+
+  if (props.loading) {
+    return (
+      <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
+        <div className="mx-auto w-full max-w-[760px] space-y-4 px-6 pt-10">
+          <Skeleton className="h-8 w-2/3 rounded-lg" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-11/12" />
+          <Skeleton className="h-4 w-4/5" />
+        </div>
+      </ThreadPrimitive.Root>
+    );
+  }
+
+  if (props.isEmpty) {
+    return (
+      <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col overflow-y-auto">
+        <div className="flex flex-1 flex-col items-center justify-center px-4 pb-[14vh]">
+          <NexusLogo className="text-fg animate-in fade-in-0 zoom-in-95 size-10 duration-500" />
+          {props.projectName ? (
+            <button
+              type="button"
+              onClick={props.onClearProject}
+              className="border-border text-muted-fg hover:text-fg mt-5 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[13px]"
+            >
+              <Folder className="size-3.5" /> {props.projectName} <X className="size-3.5" />
+            </button>
+          ) : null}
+          <h1 className="mt-4 mb-8 text-center text-[28px] font-normal tracking-tight text-balance sm:text-[32px]">
+            {props.agentName ? `Pregunta a ${props.agentName}` : "¿Qué quieres saber?"}
+          </h1>
+          <div className="w-full max-w-[700px]">
+            <Composer
+              {...props}
+              autoFocus
+              placeholder={
+                props.mode === "research" ? "Describe la investigación que quieres…" : "Pregunta lo que quieras…"
+              }
+            />
+          </div>
+          {starters.length > 0 ? (
+            <ul className="divide-border mt-6 w-full max-w-[700px] divide-y">
+              {starters.map((starter) => (
+                <li key={starter}>
+                  <button
+                    type="button"
+                    onClick={() => actions.send(starter)}
+                    className="text-muted-fg hover:text-fg flex w-full items-center gap-3 py-2.5 text-left text-[15px] transition-colors"
+                  >
+                    <Search className="size-4 shrink-0" /> {starter}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+        <footer className="text-muted-fg pb-4 text-center text-[12px]">Nexus · Tus claves, tus datos</footer>
+      </ThreadPrimitive.Root>
+    );
+  }
+
   return (
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
       <ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-3xl px-4 py-6">
-          <ThreadPrimitive.Empty>
-            <div className="py-24">
-              <EmptyState />
-            </div>
-          </ThreadPrimitive.Empty>
-          <div className="space-y-6">
-            <ThreadPrimitive.Messages
-              components={{ UserMessage, AssistantMessage }}
-            />
-          </div>
+        <div className="mx-auto flex w-full max-w-[760px] flex-col px-4 pt-4 pb-10 sm:px-6">
+          <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage, EditComposer }} />
         </div>
       </ThreadPrimitive.Viewport>
-
-      <div className="border-t border-neutral-800 bg-neutral-950/80 px-4 py-3">
-        <div className="mx-auto w-full max-w-3xl">
-          {attachments.length > 0 || uploadError ? (
-            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-              {attachments.map((attachment, index) => (
-                <span
-                  key={`${attachment.name}-${index}`}
-                  className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-neutral-300"
-                >
-                  <span className="truncate" title={attachment.name}>
-                    📎 {attachment.name}
-                    {attachment.truncated ? " (recortado)" : ""}
-                  </span>
-                  <button
-                    onClick={() => onRemoveAttachment(index)}
-                    className="text-neutral-500 hover:text-red-400"
-                    aria-label={`Quitar ${attachment.name}`}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-              {uploadError ? <span className="text-red-400">{uploadError}</span> : null}
-            </div>
-          ) : null}
-
-          <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            {FOCUS_OPTIONS.map((option) => (
-              <button
-                key={option.id}
-                onClick={() => onFocusChange(option.id)}
-                className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                  focus === option.id
-                    ? "border-neutral-500 bg-neutral-800 text-neutral-100"
-                    : "border-neutral-800 text-neutral-400 hover:border-neutral-600"
-                }`}
-              >
-                {option.label}
-              </button>
-            ))}
-            <div className="ml-auto flex overflow-hidden rounded-full border border-neutral-800">
-              <button
-                onClick={() => onModeChange("search")}
-                className={`px-2.5 py-1 text-xs ${
-                  mode === "search"
-                    ? "bg-neutral-800 text-neutral-100"
-                    : "text-neutral-400 hover:text-neutral-200"
-                }`}
-              >
-                Búsqueda
-              </button>
-              <button
-                onClick={() => onModeChange("research")}
-                className={`px-2.5 py-1 text-xs ${
-                  mode === "research"
-                    ? "bg-neutral-800 text-neutral-100"
-                    : "text-neutral-400 hover:text-neutral-200"
-                }`}
-              >
-                Research
-              </button>
-            </div>
-            <button
-              onClick={() => onUiChange(!uiEnabled)}
-              title="Respuestas con interfaz (mapas, gráficos, tablas, formularios)"
-              aria-pressed={uiEnabled}
-              className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                uiEnabled
-                  ? "border-sky-500/60 bg-sky-500/10 text-sky-300"
-                  : "border-neutral-800 text-neutral-400 hover:border-neutral-600"
-              }`}
-            >
-              Interfaz
-            </button>
-          </div>
-
-          <ComposerPrimitive.Root className="flex w-full items-end gap-2">
-            <label
-              className={`cursor-pointer rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-400 hover:border-neutral-600 ${
-                uploading ? "opacity-50" : ""
-              }`}
-              title="Adjuntar PDF, DOCX, TXT, MD, CSV o JSON (máx. 10 MB)"
-            >
-              <input
-                type="file"
-                multiple
-                hidden
-                accept=".pdf,.docx,.txt,.md,.markdown,.csv,.json,.log"
-                disabled={uploading}
-                onChange={(event) => {
-                  onFilesSelected(event.target.files);
-                  event.target.value = "";
-                }}
-              />
-              {uploading ? "…" : "📎"}
-            </label>
-            <ComposerPrimitive.Input
-              rows={2}
-              placeholder={
-                mode === "research"
-                  ? "Describe la investigación que quieres..."
-                  : "Pregunta lo que quieras..."
-              }
-              className="max-h-40 min-h-10 w-full resize-none rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-600"
-            />
-            <ComposerPrimitive.Send className="rounded-xl bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-950 hover:bg-white disabled:opacity-40">
-              Enviar
-            </ComposerPrimitive.Send>
-          </ComposerPrimitive.Root>
+      <div className="from-bg sticky bottom-0 bg-gradient-to-t from-60% to-transparent px-4 pt-6 pb-4">
+        <div className="mx-auto w-full max-w-[760px]">
+          <Composer {...props} placeholder="Haz una pregunta de seguimiento" />
         </div>
       </div>
     </ThreadPrimitive.Root>

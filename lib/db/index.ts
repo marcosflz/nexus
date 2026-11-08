@@ -7,12 +7,12 @@ const connectionString =
 
 declare global {
   // eslint-disable-next-line no-var
-  var __plexoSql: ReturnType<typeof postgres> | undefined;
+  var __nexusSql: ReturnType<typeof postgres> | undefined;
 }
 
-const sql = globalThis.__plexoSql ?? postgres(connectionString, { max: 10 });
+const sql = globalThis.__nexusSql ?? postgres(connectionString, { max: 10 });
 if (process.env.NODE_ENV !== "production") {
-  globalThis.__plexoSql = sql;
+  globalThis.__nexusSql = sql;
 }
 
 export const db = drizzle(sql, { schema });

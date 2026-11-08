@@ -21,13 +21,28 @@ EOF
 exit 0
 `;
 
+/** Dos web_search en paralelo: los resultados llegan en el mismo orden. */
+const FAKE_PARALLEL = `#!/usr/bin/env bash
+if [ "$1" = "profile" ]; then exit 0; fi
+cat > /dev/null
+cat <<'EOF'
+{"type":"system","session_id":"sess-p"}
+{"type":"tool_use","name":"web_search","input":{"query":"uno"}}
+{"type":"tool_use","name":"web_search","input":{"query":"dos"}}
+{"type":"tool_result","name":"web_search","output":"r1","duration_ms":5}
+{"type":"tool_result","name":"web_search","output":"r2","duration_ms":9}
+{"type":"result","session_id":"sess-p","exit_code":0,"text":"ok"}
+EOF
+exit 0
+`;
+
 const USER_ID = "00000000-0000-0000-0000-000000000001";
 
 describe("runHermesTurn", () => {
   let argsFile = "";
 
   beforeAll(async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "plexo-hermes-"));
+    const dir = await mkdtemp(path.join(tmpdir(), "nexus-hermes-"));
     argsFile = path.join(dir, "args.txt");
     const bin = path.join(dir, "fake-hermes");
     await writeFile(bin, FAKE, { mode: 0o755 });
@@ -63,7 +78,9 @@ describe("runHermesTurn", () => {
     expect(events.at(-1)).toMatchObject({ kind: "done", text: "Hola mundo [1]" });
 
     const args = await readFile(argsFile, "utf8");
-    expect(args).toContain("ENV:test-key");
+    // El gateway de Hermes ignora el entorno: la clave viaja por --api-key y no por variable.
+    expect(args).toContain("--api-key test-key");
+    expect(args).not.toContain("ENV:test-key");
   });
 
   it("pasa flags del runner, resume y max-turns", async () => {
@@ -83,5 +100,30 @@ describe("runHermesTurn", () => {
     expect(chat).toContain("--source tool");
     expect(chat).toContain("--resume sess-0");
     expect(chat).toContain("--max-turns 40");
+  });
+
+  it("empareja resultados de la misma herramienta en orden FIFO", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "nexus-hermes-par-"));
+    const bin = path.join(dir, "fake-hermes");
+    await writeFile(bin, FAKE_PARALLEL, { mode: 0o755 });
+    const previous = process.env.HERMES_BIN;
+    process.env.HERMES_BIN = bin;
+    try {
+      const events: TurnEvent[] = [];
+      await runHermesTurn({
+        userId: USER_ID,
+        model: "fake/model",
+        prompt: "x",
+        onEvent: (event) => events.push(event),
+      });
+
+      const starts = events.filter((e) => e.kind === "tool-start");
+      const ends = events.filter((e) => e.kind === "tool-end");
+      expect(starts.map((e) => e.id)).toEqual(["t1", "t2"]);
+      expect(ends.map((e) => e.id)).toEqual(["t1", "t2"]);
+      expect(ends.map((e) => (e.kind === "tool-end" ? e.durationMs : 0))).toEqual([5, 9]);
+    } finally {
+      process.env.HERMES_BIN = previous;
+    }
   });
 });

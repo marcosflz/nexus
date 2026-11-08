@@ -14,7 +14,11 @@ export interface ExtractedAttachment {
   truncated: boolean;
 }
 
-export async function extractAttachment(file: File): Promise<ExtractedAttachment> {
+export async function extractAttachment(
+  file: File,
+  options: { maxChars?: number } = {},
+): Promise<ExtractedAttachment> {
+  const maxChars = options.maxChars ?? MAX_ATTACHMENT_CHARS;
   const name = file.name.slice(0, 200);
   const lower = name.toLowerCase();
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -39,13 +43,13 @@ export async function extractAttachment(file: File): Promise<ExtractedAttachment
   }
 
   const normalized = raw.replace(/\u0000/g, "").trim();
-  const truncated = normalized.length > MAX_ATTACHMENT_CHARS;
+  const truncated = normalized.length > maxChars;
 
   return {
     name,
     mime: file.type || "application/octet-stream",
     size: file.size,
-    text: normalized.slice(0, MAX_ATTACHMENT_CHARS),
+    text: normalized.slice(0, maxChars),
     truncated,
   };
 }

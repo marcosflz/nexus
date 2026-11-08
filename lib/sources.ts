@@ -107,3 +107,47 @@ export function buildSources(finalText: string, toolOutputs: string[]): SourceIt
 
   return [...block, ...extra].slice(0, 30);
 }
+
+/**
+ * Preguntas de seguimiento que Hermes escribe al final de la respuesta, tras
+ * `## Sources`, como una lista bajo `## Follow-ups`. Hermes no puede llamar a
+ * herramientas de la app, así que este bloque es su único canal.
+ */
+const FOLLOWUPS_HEADING = /\n+#{1,6}\s*Follow[-\s]?ups?\b[^\n]*(?:\n|$)/i;
+
+export function parseFollowupsBlock(text: string): string[] {
+  const match = FOLLOWUPS_HEADING.exec(text);
+  if (!match) return [];
+  const after = text.slice(match.index + match[0].length);
+  const questions: string[] = [];
+  for (const line of after.split("\n")) {
+    const item = line.match(/^\s*(?:[-*•]|\d+[.)])\s*(.+?)\s*$/);
+    if (!item) {
+      if (line.trim() === "" && questions.length === 0) continue;
+      break;
+    }
+    const question = item[1].replace(/^\*\*(.*)\*\*$/, "$1").trim();
+    if (question) questions.push(question);
+    if (questions.length === 5) break;
+  }
+  return questions;
+}
+
+/** Texto sin el bloque de follow-ups (que va al final de la respuesta). */
+export function stripFollowupsBlock(text: string): string {
+  const match = FOLLOWUPS_HEADING.exec(text);
+  return match ? text.slice(0, match.index).trimEnd() : text;
+}
+
+const SECOND_LEVEL = new Set(["co", "com", "org", "net", "gov", "gob", "ac", "edu"]);
+
+/** Nombre corto de un dominio para las citas: «es.wikipedia.org» → «wikipedia», «bbc.co.uk» → «bbc». */
+export function shortDomain(url: string): string {
+  const host = domainOf(url);
+  if (!host) return "";
+  const parts = host.split(".");
+  if (parts.length < 2) return host;
+  const candidate = parts[parts.length - 2];
+  if (SECOND_LEVEL.has(candidate) && parts.length >= 3) return parts[parts.length - 3];
+  return candidate;
+}

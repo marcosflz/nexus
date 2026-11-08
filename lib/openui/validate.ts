@@ -1,5 +1,5 @@
 import { createParser } from "@openuidev/lang-core";
-import { OPENUI_ROOT, plexoLibrary } from "./library";
+import { OPENUI_ROOT, nexusLibrary } from "./library";
 
 export interface OpenUiValidation {
   ok: boolean;
@@ -18,7 +18,7 @@ let parser: Parser | null = null;
 
 function getParser(): Parser {
   if (!parser) {
-    parser = createParser(plexoLibrary.toJSONSchema(), OPENUI_ROOT);
+    parser = createParser(nexusLibrary.toJSONSchema(), OPENUI_ROOT);
   }
   return parser;
 }

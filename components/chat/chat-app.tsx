@@ -1,21 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
+  type AddToolResultOptions,
   type AppendMessage,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import { ChatThread } from "./thread";
-import { Sidebar } from "./sidebar";
-import { OPENUI_TOOL_NAME, splitOpenUiBlocks } from "@/lib/openui/blocks";
+import { EventType } from "@ag-ui/core";
+import { toast } from "sonner";
+import { followRun } from "@/lib/agui/client";
+import { initialAgUiState, reduceAgUi, type AgUiState } from "@/lib/agui/reducer";
+import { OPENUI_TOOL_NAME } from "@/lib/openui/blocks";
+import type { ResumeEntryInput } from "@/lib/runs/launch";
 import { randomId } from "@/lib/uuid";
+import { useShell } from "@/components/shell/shell-context";
+import { PREFS_EVENT, readPrefs, type Prefs } from "@/lib/prefs";
+import { ChatActionsProvider, type ChatActions, type MessageCustom } from "./chat-context";
+import { ChatHeader } from "./chat-header";
+import { ChatThread, type BackendOption } from "./thread";
 import type {
   PendingAttachment,
-  ThreadSummary,
   UiAttachment,
+  UiInterrupt,
   UiMessage,
+  UiPart,
   UiSource,
   UiToolCall,
   UiUsage,
@@ -29,12 +39,23 @@ interface ServerMessage {
   tools: UiToolCall[] | null;
   attachments: UiAttachment[] | null;
   usage: UiUsage | null;
+  parts: UiPart[] | null;
+  followups: string[] | null;
+  runId: string | null;
+  rating: number | null;
   createdAt: string;
+}
+
+interface ServerActiveRun {
+  id: string;
+  status: string;
+  lastSeq: number;
 }
 
 function fromServerMessage(row: ServerMessage): UiMessage {
   return {
     id: row.id,
+    serverId: row.id,
     role: row.role === "user" ? "user" : "assistant",
     content: row.content,
     tools: (row.tools ?? []).map((tool) => ({
@@ -44,74 +65,316 @@ function fromServerMessage(row: ServerMessage): UiMessage {
     sources: row.sources ?? [],
     attachments: row.attachments ?? [],
     usage: row.usage ?? null,
+    parts: row.parts ?? undefined,
+    followups: row.followups ?? undefined,
+    runId: row.runId ?? undefined,
+    rating: row.rating === 1 || row.rating === -1 ? row.rating : null,
     status: "complete",
     createdAt: row.createdAt,
   };
 }
 
-function parseFrame(frame: string): { event: string; data: Record<string, unknown> } | null {
-  let event = "message";
-  let dataLine = "";
-  for (const line of frame.split("\n")) {
-    if (line.startsWith("event:")) event = line.slice(6).trim();
-    else if (line.startsWith("data:")) dataLine += line.slice(5).trim();
-  }
-  if (!dataLine) return null;
+const placeholder = (id: string): UiMessage => ({
+  id,
+  role: "assistant",
+  content: "",
+  tools: [],
+  sources: [],
+  attachments: [],
+  status: "running",
+  createdAt: new Date().toISOString(),
+});
+
+/** El resultado de una herramienta llega como texto; si es JSON, se entrega como objeto. */
+function parseToolResult(result: string | undefined): unknown {
+  if (!result) return "";
   try {
-    return { event, data: JSON.parse(dataLine) as Record<string, unknown> };
+    return JSON.parse(result);
   } catch {
-    return null;
+    return result;
   }
 }
 
+interface TurnRequest {
+  text: string;
+  attachments: PendingAttachment[];
+  /** Mensaje de usuario (id del servidor) que este turno sustituye. */
+  replaceServerId?: string;
+}
+
+interface AgentSummary {
+  id: string;
+  name: string;
+  avatar: string;
+  slug: string;
+}
+
 export function ChatApp({
-  user,
-  initialThreads,
+  initialAgentId = null,
+  initialThreadId = null,
 }: {
-  user: { id: string; email: string };
-  initialThreads: ThreadSummary[];
+  /** Agente preseleccionado (`/?agent=`). Empieza un chat nuevo con él. */
+  initialAgentId?: string | null;
+  /** Hilo a abrir (`/?thread=`). */
+  initialThreadId?: string | null;
 }) {
-  const [threads, setThreads] = useState<ThreadSummary[]>(initialThreads);
-  const [currentThreadId, setCurrentThreadId] = useState<string | null>(
-    initialThreads[0]?.id ?? null,
-  );
+  const shell = useShell();
+  const currentThreadId = shell.currentThreadId;
+  const [agentId, setAgentId] = useState<string | null>(initialAgentId);
+  const [agents, setAgents] = useState<AgentSummary[]>([]);
+  const [agentStarters, setAgentStarters] = useState<string[] | undefined>(undefined);
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [loadingThread, setLoadingThread] = useState(false);
+  const [modelLabel, setModelLabel] = useState<string | null>(null);
   const [focus, setFocus] = useState("web");
   const [mode, setMode] = useState<"search" | "research">("search");
   const [uiMode, setUiMode] = useState(false);
+  const [backend, setBackend] = useState("hermes");
+  const [backends, setBackends] = useState<BackendOption[]>([]);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const abortRef = useRef<(() => void) | null>(null);
+
+  const messagesRef = useRef<UiMessage[]>([]);
+  messagesRef.current = messages;
+  const threadRef = useRef<string | null>(currentThreadId);
+  threadRef.current = currentThreadId;
+
+  /**
+   * Control del *seguimiento* SSE en curso. El run vive en el servidor: abortar
+   * esto solo desengancha la pestaña (cambio de hilo, recarga); para parar el
+   * run hay que llamar a `onCancel`.
+   */
+  const followRef = useRef<AbortController | null>(null);
+  const runIdRef = useRef<string | null>(null);
+  const cancelRequestedRef = useRef(false);
+  /** Estado del reducer de cada mensaje, para continuar tras una pausa. */
+  const statesRef = useRef(new Map<string, AgUiState>());
+  /** Hilo recién creado por nosotros: sus mensajes ya están en pantalla, no se recargan. */
+  const skipLoadRef = useRef<string | null>(null);
+
+  // --- capacidades, notificaciones ---------------------------------------
+
+  useEffect(() => {
+    fetch("/api/capabilities")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { backends: BackendOption[]; defaultBackend: string } | null) => {
+        if (!data) return;
+        setBackends(data.backends);
+        setBackend(data.defaultBackend);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/agents")
+      .then((res) => (res.ok ? res.json() : { agents: [] }))
+      .then((data: { agents: (AgentSummary & { status: string })[] }) =>
+        setAgents(data.agents.filter((agent) => agent.status === "active")),
+      )
+      .catch(() => {});
+  }, []);
+
+  // Las preguntas de arranque del agente elegido.
+  useEffect(() => {
+    setAgentStarters(undefined);
+    if (!agentId) return;
+    let alive = true;
+    fetch(`/api/agents/${agentId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { spec?: { starters?: string[] } } | null) => {
+        if (alive && data?.spec?.starters?.length) setAgentStarters(data.spec.starters);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [agentId]);
+
+  /** `/?agent=` abre un chat nuevo con ese agente: la señal de «nuevo chat» no debe quitarlo. */
+  const keepAgentRef = useRef(false);
+
+  // Apertura inicial desde la URL (`/?thread=` o `/?agent=`).
+  useEffect(() => {
+    if (initialThreadId) shell.selectThread(initialThreadId);
+    else if (initialAgentId) {
+      keepAgentRef.current = true;
+      shell.newChat();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al montar
+  }, []);
+
+  // Preferencias de búsqueda (Ajustes → Preferencias).
+  useEffect(() => {
+    const apply = (p: Prefs) => {
+      setFocus(p.focus);
+      setMode(p.mode);
+      setUiMode(p.ui);
+    };
+    apply(readPrefs());
+    const onPrefs = (event: Event) => apply((event as CustomEvent<Prefs>).detail);
+    window.addEventListener(PREFS_EVENT, onPrefs);
+    return () => window.removeEventListener(PREFS_EVENT, onPrefs);
+  }, []);
+
+  // Nombre del modelo configurado, para el selector del compositor.
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { credential?: { model?: string } | null } | null) => {
+        const model = data?.credential?.model;
+        if (model) setModelLabel(model.split("/").pop() ?? model);
+      })
+      .catch(() => {});
+  }, []);
+
+  // «Nuevo chat»: se limpian adjuntos y se vuelve al agente integrado (salvo al montar).
+  const firstSignal = useRef(true);
+  useEffect(() => {
+    if (firstSignal.current) {
+      firstSignal.current = false;
+      return;
+    }
+    setPendingAttachments([]);
+    setUploadError(null);
+    if (keepAgentRef.current) keepAgentRef.current = false;
+    else setAgentId(null);
+  }, [shell.newChatSignal]);
+
+  // --- seguimiento de runs -----------------------------------------------
+
+  const beginFollow = useCallback((): AbortController => {
+    followRef.current?.abort();
+    const controller = new AbortController();
+    followRef.current = controller;
+    runIdRef.current = null;
+    cancelRequestedRef.current = false;
+    setIsRunning(true);
+    return controller;
+  }, []);
+
+  const endFollow = useCallback((controller: AbortController) => {
+    if (followRef.current !== controller) return;
+    followRef.current = null;
+    runIdRef.current = null;
+    setIsRunning(false);
+  }, []);
+
+  /** Aplica los eventos AG-UI de un run al mensaje del asistente en pantalla. */
+  const consumeRun = useCallback(
+    async (opts: {
+      assistantId: string;
+      controller: AbortController;
+      initial?: Response;
+      runId?: string;
+      /** Estado previo del mensaje al reanudar un run en pausa. */
+      seed?: AgUiState;
+    }) => {
+      const { assistantId, controller } = opts;
+      let state = opts.seed ?? initialAgUiState(assistantId);
+      let serverId: string | undefined;
+      const patch = (fn: (message: UiMessage) => UiMessage) =>
+        setMessages((prev) => prev.map((m) => (m.id === assistantId ? fn(m) : m)));
+
+      try {
+        const result = await followRun({
+          initial: opts.initial,
+          runId: opts.runId,
+          fetchEvents: (runId, after, signal) =>
+            fetch(`/api/runs/${runId}/events?after=${after}`, { signal }),
+          onEvent: (event) => {
+            if (event.type === EventType.RUN_STARTED) {
+              runIdRef.current = (event as { runId: string }).runId;
+            }
+            if (event.type === EventType.CUSTOM && (event as { name?: string }).name === "nexus.message") {
+              serverId = (event as unknown as { value: { messageId: string } }).value.messageId;
+            }
+            state = reduceAgUi(state, event);
+            statesRef.current.set(assistantId, state);
+            patch((m) => ({
+              ...state.message,
+              id: assistantId,
+              serverId: serverId ?? m.serverId,
+              rating: m.rating,
+            }));
+          },
+          signal: controller.signal,
+        });
+        if (!result.terminal && cancelRequestedRef.current) {
+          patch((m) => ({ ...m, status: "error", error: "Generación cancelada" }));
+        }
+      } catch (error) {
+        patch((m) => ({
+          ...m,
+          status: "error",
+          error: error instanceof Error ? error.message : "Error desconocido",
+        }));
+      } finally {
+        endFollow(controller);
+      }
+    },
+    [endFollow],
+  );
+
+  // --- carga de hilos ------------------------------------------------------
 
   useEffect(() => {
     let cancelled = false;
-    if (!currentThreadId) {
-      setMessages([]);
+    // Hilo recién creado por nosotros: el seguimiento en curso es suyo. Hay que
+    // comprobarlo ANTES de soltar nada, o se aborta la petición que acaba de salir.
+    if (currentThreadId && skipLoadRef.current === currentThreadId) {
+      skipLoadRef.current = null;
       return;
     }
+    // Cambiar a otro hilo desengancha el seguimiento anterior; el run sigue en el servidor.
+    followRef.current?.abort();
+
+    if (!currentThreadId) {
+      setMessages([]);
+      setLoadingThread(false);
+      return;
+    }
+
+    setLoadingThread(true);
     fetch(`/api/threads/${currentThreadId}`)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error("no encontrado"))))
-      .then((data: { messages: ServerMessage[] }) => {
-        if (!cancelled) setMessages(data.messages.map(fromServerMessage));
-      })
+      .then(
+        (data: {
+          thread: { backend: string | null; agentId: string | null };
+          messages: ServerMessage[];
+          activeRun?: ServerActiveRun | null;
+        }) => {
+          if (cancelled) return;
+          setLoadingThread(false);
+          if (data.thread.backend) setBackend(data.thread.backend);
+          setAgentId(data.thread.agentId);
+          const loaded = data.messages.map(fromServerMessage);
+          const active = data.activeRun;
+          if (!active) {
+            setMessages(loaded);
+            return;
+          }
+          // Recarga a mitad de turno: se reconstruye la respuesta desde el log del run.
+          const assistantId = randomId();
+          setMessages([...loaded, placeholder(assistantId)]);
+          const controller = beginFollow();
+          void consumeRun({ assistantId, controller, runId: active.id });
+        },
+      )
       .catch(() => {
-        if (!cancelled) setMessages([]);
+        if (cancelled) return;
+        setLoadingThread(false);
+        setMessages([]);
+        shell.selectThread(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [currentThreadId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `shell` cambia a cada actualización de la lista
+  }, [currentThreadId, beginFollow, consumeRun]);
 
-  const refreshThreads = useCallback(async () => {
-    const res = await fetch("/api/threads");
-    if (!res.ok) return;
-    const data = (await res.json()) as {
-      threads: { id: string; title: string; updatedAt: string }[];
-    };
-    setThreads(data.threads);
-  }, []);
+  // --- subida de archivos --------------------------------------------------
 
   const handleFiles = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -136,20 +399,27 @@ export function ChatApp({
     }
   }, []);
 
-  const onNew = useCallback(
-    async (message: AppendMessage) => {
-      const part = message.content[0];
-      if (!part || part.type !== "text") return;
-      const text = part.text;
-      const attachments = pendingAttachments;
+  // --- turnos --------------------------------------------------------------
+
+  const runTurn = useCallback(
+    async ({ text, attachments, replaceServerId }: TurnRequest) => {
       const sentFocus = focus === "web" ? undefined : focus;
       const sentMode = mode === "search" ? undefined : mode;
 
-      setIsRunning(true);
+      // Al editar o regenerar, la conversación se corta en el mensaje sustituido.
+      if (replaceServerId) {
+        setMessages((prev) => {
+          const index = prev.findIndex((m) => m.serverId === replaceServerId);
+          return index === -1 ? prev : prev.slice(0, index);
+        });
+      }
+
+      const userLocalId = randomId();
+      const assistantId = randomId();
       setMessages((prev) => [
         ...prev,
         {
-          id: randomId(),
+          id: userLocalId,
           role: "user",
           content: text,
           tools: [],
@@ -158,39 +428,42 @@ export function ChatApp({
           status: "complete",
           createdAt: new Date().toISOString(),
         },
+        placeholder(assistantId),
       ]);
 
-      const assistantId = randomId();
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: assistantId,
-          role: "assistant",
-          content: "",
-          tools: [],
-          sources: [],
-          attachments: [],
-          status: "running",
-          createdAt: new Date().toISOString(),
-        },
-      ]);
-
-      const update = (fn: (m: UiMessage) => UiMessage) =>
-        setMessages((prev) => prev.map((m) => (m.id === assistantId ? fn(m) : m)));
+      const controller = beginFollow();
+      const fail = (error: unknown) => {
+        const message =
+          error instanceof Error && error.name === "AbortError"
+            ? cancelRequestedRef.current
+              ? "Generación cancelada"
+              : null
+            : error instanceof Error
+              ? error.message
+              : "Error desconocido";
+        if (message) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, status: "error", error: message } : m)),
+          );
+        }
+        endFollow(controller);
+      };
 
       try {
-        let threadId = currentThreadId;
+        let threadId = threadRef.current;
         if (!threadId) {
-          const res = await fetch("/api/threads", { method: "POST" });
+          const res = await fetch("/api/threads", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId: shell.activeProjectId ?? undefined }),
+          });
           if (!res.ok) throw new Error("No se pudo crear el hilo");
           const data = (await res.json()) as { thread: { id: string } };
           threadId = data.thread.id;
-          setCurrentThreadId(threadId);
-          await refreshThreads();
+          skipLoadRef.current = threadId;
+          shell.selectThread(threadId);
+          await shell.refreshThreads();
         }
-
-        const controller = new AbortController();
-        abortRef.current = () => controller.abort();
 
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -201,166 +474,203 @@ export function ChatApp({
             focus: sentFocus,
             mode: sentMode,
             ui: uiMode || undefined,
+            backend,
+            agentId: agentId ?? undefined,
             attachments: attachments.length > 0 ? attachments : undefined,
+            replace: replaceServerId ? { messageId: replaceServerId } : undefined,
           }),
           signal: controller.signal,
         });
 
         if (!res.ok || !res.body) {
-          const data = (await res.json().catch(() => ({}))) as { error?: string };
+          const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+          if (data.code === "no_credential") {
+            // Sin proveedor configurado no hay nada que reintentar: se lleva al
+            // usuario a Ajustes y se quita el mensaje en blanco del asistente.
+            setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+            endFollow(controller);
+            shell.openSettings("models", {
+              notice: "Antes de chatear necesitas configurar un proveedor y su API key.",
+            });
+            return;
+          }
           throw new Error(data.error ?? `Error del servidor (${res.status})`);
         }
 
-        setPendingAttachments([]);
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          let boundary = buffer.indexOf("\n\n");
-          while (boundary !== -1) {
-            const frame = buffer.slice(0, boundary);
-            buffer = buffer.slice(boundary + 2);
-            const parsed = parseFrame(frame);
-            if (parsed) {
-              const { event, data } = parsed;
-              if (event === "text") {
-                update((m) => ({ ...m, content: m.content + String(data.delta ?? "") }));
-              } else if (event === "tool") {
-                const toolId = String(data.id ?? "");
-                const name = String(data.name ?? "tool");
-                const phase = String(data.phase ?? "start");
-                if (phase === "start") {
-                  update((m) => ({
-                    ...m,
-                    tools: m.tools.some((t) => t.id === toolId)
-                      ? m.tools
-                      : [...m.tools, { id: toolId, name, input: data.input, status: "running" }],
-                  }));
-                } else {
-                  update((m) => ({
-                    ...m,
-                    tools: m.tools.map((t) =>
-                      t.id === toolId
-                        ? {
-                            ...t,
-                            status: data.isError ? "error" : "complete",
-                            durationMs:
-                              typeof data.durationMs === "number" ? data.durationMs : undefined,
-                          }
-                        : t,
-                    ),
-                  }));
-                }
-              } else if (event === "sources") {
-                update((m) => ({ ...m, sources: (data.sources as UiSource[]) ?? [] }));
-              } else if (event === "usage") {
-                update((m) => ({ ...m, usage: data as UiUsage }));
-              } else if (event === "error") {
-                update((m) => ({
-                  ...m,
-                  status: "error",
-                  error: String(data.message ?? "Error desconocido"),
-                }));
-              } else if (event === "done") {
-                update((m) => ({
-                  ...m,
-                  status: m.status === "error" ? "error" : "complete",
-                }));
-              }
-            }
-            boundary = buffer.indexOf("\n\n");
-          }
+        const userServerId = res.headers.get("X-Nexus-User-Message");
+        if (userServerId) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === userLocalId ? { ...m, serverId: userServerId } : m)),
+          );
         }
-
-        await refreshThreads();
+        setPendingAttachments([]);
+        await consumeRun({ assistantId, controller, initial: res });
+        // Solo refresca el título del hilo: un fallo aquí no invalida la respuesta.
+        await shell.refreshThreads().catch(() => {});
       } catch (error) {
-        const message =
-          error instanceof Error && error.name === "AbortError"
-            ? "Generación cancelada"
-            : error instanceof Error
-              ? error.message
-              : "Error desconocido";
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, status: "error", error: message } : m)),
-        );
-      } finally {
-        abortRef.current = null;
-        setIsRunning(false);
+        fail(error);
       }
     },
-    [currentThreadId, refreshThreads, pendingAttachments, focus, mode, uiMode],
+    [focus, mode, uiMode, backend, agentId, shell, beginFollow, endFollow, consumeRun],
   );
+
+  const onNew = useCallback(
+    async (message: AppendMessage) => {
+      const part = message.content[0];
+      if (!part || part.type !== "text") return;
+      await runTurn({ text: part.text, attachments: pendingAttachments });
+    },
+    [runTurn, pendingAttachments],
+  );
+
+  const onEdit = useCallback(
+    async (message: AppendMessage) => {
+      const part = message.content[0];
+      if (!part || part.type !== "text" || !message.sourceId) return;
+      const source = messagesRef.current.find((m) => m.id === message.sourceId);
+      if (!source?.serverId) {
+        toast.error("El mensaje aún se está guardando; inténtalo de nuevo en un momento.");
+        return;
+      }
+      await runTurn({ text: part.text, attachments: [], replaceServerId: source.serverId });
+    },
+    [runTurn],
+  );
+
+  const onReload = useCallback(
+    async (parentId: string | null) => {
+      const user = messagesRef.current.find((m) => m.id === parentId);
+      if (!user?.serverId) {
+        toast.error("No se puede regenerar todavía; inténtalo de nuevo en un momento.");
+        return;
+      }
+      await runTurn({ text: user.content, attachments: [], replaceServerId: user.serverId });
+    },
+    [runTurn],
+  );
+
+  /** Responde a un run en pausa (formulario o aprobación) y sigue el resto del turno. */
+  const resumeRun = useCallback(
+    async (runId: string, entries: ResumeEntryInput[]) => {
+      const target = messagesRef.current.find((m) => m.runId === runId);
+      if (!target) return;
+      const assistantId = target.id;
+      const controller = beginFollow();
+      // La pausa deja de estar vigente en pantalla desde ya.
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantId ? { ...m, interrupts: [], status: "running" } : m)),
+      );
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resume: { runId, entries } }),
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(data.error ?? `Error del servidor (${res.status})`);
+        }
+        const seed = statesRef.current.get(assistantId);
+        await consumeRun({ assistantId, controller, initial: res, seed });
+      } catch (error) {
+        if (!(error instanceof Error && error.name === "AbortError")) {
+          const message = error instanceof Error ? error.message : "No se pudo reanudar";
+          toast.error(message);
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, status: "error", error: message } : m)),
+          );
+        }
+        endFollow(controller);
+      }
+    },
+    [beginFollow, endFollow, consumeRun],
+  );
+
+  const onAddToolResult = useCallback(
+    async (options: AddToolResultOptions) => {
+      const message = messagesRef.current.find((m) => m.id === options.messageId);
+      if (!message?.runId) return;
+      await resumeRun(message.runId, [
+        {
+          callId: options.toolCallId,
+          status: "resolved",
+          payload: options.result,
+        },
+      ]);
+    },
+    [resumeRun],
+  );
+
+  const onCancel = useCallback(async () => {
+    cancelRequestedRef.current = true;
+    // El run vive en el servidor: hay que pedirle que pare, no solo cerrar la conexión.
+    const runId = runIdRef.current;
+    if (runId) {
+      void fetch(`/api/runs/${runId}/cancel`, { method: "POST" }).catch(() => {});
+    }
+    followRef.current?.abort();
+  }, []);
+
+  const rate = useCallback((serverId: string, rating: 1 | -1 | null) => {
+    setMessages((prev) => prev.map((m) => (m.serverId === serverId ? { ...m, rating } : m)));
+    void fetch(`/api/messages/${serverId}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rating }),
+    }).then((res) => {
+      if (!res.ok) toast.error("No se pudo guardar tu valoración");
+    });
+  }, []);
+
+  // --- runtime de assistant-ui ---------------------------------------------
 
   const convertMessage = useCallback((message: UiMessage): ThreadMessageLike => {
     const content: Record<string, unknown>[] = [];
-    if (message.attachments.length > 0) {
-      content.push({
-        type: "text",
-        text: message.attachments.map((attachment) => `📎 ${attachment.name}`).join("  "),
-      });
-    }
-
-    // Herramientas del agente: van antes del texto, como indicador de progreso.
-    for (const tool of message.tools) {
-      if (tool.kind === "openui") continue;
-      content.push({
+    const toolPart = (tool: UiToolCall): Record<string, unknown> => {
+      const done = tool.status === "complete" || tool.status === "error";
+      if (tool.kind === "openui") {
+        const ui = String((tool.input as { ui?: string } | undefined)?.ui ?? "");
+        return {
+          type: "tool-call",
+          toolCallId: tool.id,
+          toolName: OPENUI_TOOL_NAME,
+          args: { ui },
+          argsText: JSON.stringify({ ui }),
+          result: done ? "" : undefined,
+        };
+      }
+      return {
         type: "tool-call",
         toolCallId: tool.id,
         toolName: tool.name,
         args: tool.input ?? {},
         argsText: tool.argsText ?? JSON.stringify(tool.input ?? {}),
-        result: tool.status === "complete" ? "" : undefined,
-      });
-    }
+        result: done ? parseToolResult(tool.result) : undefined,
+        isError: tool.status === "error" ? true : undefined,
+      };
+    };
 
-    // Prosa, recortando los bloques de UI que pueda haber dentro del texto.
-    const segments = splitOpenUiBlocks(message.content);
-    const prose = segments
-      .filter((segment): segment is Extract<typeof segment, { type: "text" }> => segment.type === "text")
-      .map((segment) => segment.text)
-      .join("")
-      .replace(/\n{3,}/g, "\n\n");
-
-    if (prose) {
-      content.push({ type: "text", text: prose });
-    }
-
-    // La UI generativa va después de la prosa: primero se lee la respuesta.
-    // Si el mensaje viene de la base de datos, el bloque ya está como tool
-    // persistida; si viene del stream, se extrae del texto en vivo.
-    const persistedOpenUi = message.tools.filter((tool) => tool.kind === "openui");
-    const openUiParts =
-      persistedOpenUi.length > 0
-        ? persistedOpenUi.map((tool) => ({
-            id: tool.id,
-            program: String((tool.input as { ui?: string } | undefined)?.ui ?? ""),
-            closed: tool.status === "complete",
-          }))
-        : segments
-            .filter(
-              (segment): segment is Extract<typeof segment, { type: "openui" }> =>
-                segment.type === "openui",
-            )
-            .map((segment) => ({
-              id: `openui-${segment.index}`,
-              program: segment.program,
-              closed: segment.closed,
-            }));
-
-    for (const block of openUiParts) {
-      content.push({
-        type: "tool-call",
-        toolCallId: block.id,
-        toolName: OPENUI_TOOL_NAME,
-        args: { ui: block.program },
-        argsText: JSON.stringify({ ui: block.program }),
-        result: block.closed ? "" : undefined,
-      });
+    if (message.parts && message.parts.length > 0) {
+      // Orden real del turno: texto → pasos → texto → interfaz.
+      const byId = new Map(message.tools.map((tool) => [tool.id, tool]));
+      for (const part of message.parts) {
+        if (part.type === "text") {
+          if (part.text) content.push({ type: "text", text: part.text });
+          continue;
+        }
+        const tool = byId.get(part.toolId);
+        if (tool) content.push(toolPart(tool));
+      }
+    } else {
+      // Mensajes anteriores a las partes ordenadas: herramientas primero, luego prosa y UI.
+      for (const tool of message.tools) {
+        if (tool.kind !== "openui") content.push(toolPart(tool));
+      }
+      if (message.content) content.push({ type: "text", text: message.content });
+      for (const tool of message.tools) {
+        if (tool.kind === "openui") content.push(toolPart(tool));
+      }
     }
 
     if (message.error) {
@@ -376,15 +686,27 @@ export function ChatApp({
       });
     }
 
+    const custom: MessageCustom = {
+      serverId: message.serverId,
+      runId: message.runId,
+      followups: message.followups,
+      interrupts: message.interrupts as UiInterrupt[] | undefined,
+      rating: message.rating ?? null,
+      attachments: message.attachments.map(({ name }) => ({ name })),
+    };
+
+    const waiting = (message.interrupts?.length ?? 0) > 0;
     return {
       id: message.id,
       role: message.role,
       content: content as unknown as ThreadMessageLike["content"],
       createdAt: new Date(message.createdAt),
+      metadata: { custom: custom as Record<string, unknown> },
       ...(message.role === "assistant"
         ? {
-            status:
-              message.status === "running"
+            status: waiting
+              ? ({ type: "requires-action", reason: "tool-calls" } as const)
+              : message.status === "running"
                 ? ({ type: "running" } as const)
                 : message.status === "error"
                   ? ({ type: "incomplete", reason: "error" } as const)
@@ -394,65 +716,68 @@ export function ChatApp({
     };
   }, []);
 
-  const onCancel = useCallback(async () => {
-    abortRef.current?.();
-  }, []);
-
   const runtime = useExternalStoreRuntime<UiMessage>({
     messages,
     convertMessage,
     onNew,
+    onEdit,
+    onReload,
     onCancel,
+    onAddToolResult,
     isRunning,
   });
 
-  const handleNew = useCallback(() => {
-    setCurrentThreadId(null);
-    setMessages([]);
-    setPendingAttachments([]);
-  }, []);
-
-  const handleDelete = useCallback(
-    async (id: string) => {
-      await fetch(`/api/threads/${id}`, { method: "DELETE" });
-      setThreads((prev) => prev.filter((t) => t.id !== id));
-      if (currentThreadId === id) {
-        setCurrentThreadId(null);
-        setMessages([]);
-      }
-    },
-    [currentThreadId],
+  const actions = useMemo<ChatActions>(
+    () => ({
+      send: (text) => void runTurn({ text, attachments: [] }),
+      resume: (runId, entries) => void resumeRun(runId, entries),
+      rate,
+      isRunning,
+    }),
+    [runTurn, resumeRun, rate, isRunning],
   );
+
+  const currentThread = shell.threads.find((t) => t.id === currentThreadId) ?? null;
+  const activeAgent = agents.find((agent) => agent.id === agentId);
+  const activeProject = shell.projects.find((p) => p.id === shell.activeProjectId) ?? null;
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div className="flex h-screen">
-        <Sidebar
-          threads={threads}
-          currentThreadId={currentThreadId}
-          userEmail={user.email}
-          onSelect={setCurrentThreadId}
-          onNew={handleNew}
-          onDelete={handleDelete}
-        />
-        <main className="min-w-0 flex-1">
-          <ChatThread
-            focus={focus}
-            mode={mode}
-            uiEnabled={uiMode}
-            onFocusChange={setFocus}
-            onModeChange={setMode}
-            onUiChange={setUiMode}
-            attachments={pendingAttachments}
-            uploading={uploading}
-            uploadError={uploadError}
-            onFilesSelected={handleFiles}
-            onRemoveAttachment={(index) =>
-              setPendingAttachments((prev) => prev.filter((_, i) => i !== index))
-            }
-          />
-        </main>
-      </div>
+      <ChatActionsProvider value={actions}>
+        <div className="relative flex h-svh min-w-0 flex-col">
+          <ChatHeader thread={currentThread} />
+          <div className="min-h-0 flex-1">
+            <ChatThread
+              isEmpty={messages.length === 0 && !loadingThread}
+              loading={loadingThread && messages.length === 0}
+              agentName={activeAgent?.name}
+              projectName={currentThreadId ? null : (activeProject?.name ?? null)}
+              onClearProject={() => shell.newChat(null)}
+              modelLabel={modelLabel}
+              starters={agentStarters ?? []}
+              agents={agents}
+              agentId={agentId}
+              onAgentChange={setAgentId}
+              focus={focus}
+              mode={mode}
+              uiEnabled={uiMode}
+              backend={backend}
+              backends={backends}
+              onFocusChange={setFocus}
+              onModeChange={setMode}
+              onUiChange={setUiMode}
+              onBackendChange={setBackend}
+              attachments={pendingAttachments}
+              uploading={uploading}
+              uploadError={uploadError}
+              onFilesSelected={handleFiles}
+              onRemoveAttachment={(index) =>
+                setPendingAttachments((prev) => prev.filter((_, i) => i !== index))
+              }
+            />
+          </div>
+        </div>
+      </ChatActionsProvider>
     </AssistantRuntimeProvider>
   );
 }

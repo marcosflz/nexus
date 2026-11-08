@@ -94,6 +94,14 @@ const AGENT_TOOLS = new Set([
   "skills_list",
 ]);
 
+/** Herramientas propias de Nexus que solo leen o escriben datos del propio usuario. */
+const NEXUS_APP_TOOLS = new Set(["knowledge_search", "remember", "recall", "forget"]);
+
+/** Una herramienta de un conector MCP se expone como `<conector>__<herramienta>`. */
+export function isConnectorTool(tool: string): boolean {
+  return tool.includes("__");
+}
+
 const VAULT_TOOLS = /^browser_vault/;
 
 /**
@@ -159,6 +167,18 @@ export const DEFAULT_RULES: PolicyRule[] = [
     id: "allow-agent",
     effect: "allow",
     when: (req) => AGENT_TOOLS.has(req.tool),
+  },
+  {
+    id: "allow-nexus-app",
+    effect: "allow",
+    when: (req) => NEXUS_APP_TOOLS.has(req.tool),
+  },
+  // Un conector lo habilitó la propia persona y limita sus herramientas (`allowTools`);
+  // una rutina que lo use sigue pidiendo aprobación por `ask-scheduled-write`.
+  {
+    id: "allow-connector-user",
+    effect: "allow",
+    when: (req) => req.kind === "connector" && req.initiator === "user",
   },
   // Sin coincidencia -> el motor deniega.
 ];

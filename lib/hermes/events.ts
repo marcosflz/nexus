@@ -9,10 +9,20 @@ export interface HermesTokens {
 export type HermesRawEvent =
   | { type: "system"; subtype?: string; model?: string; session_id?: string; timestamp?: number }
   | { type: "text"; text?: string; timestamp?: number }
-  | { type: "tool_use"; name: string; input?: unknown; timestamp?: number }
+  | {
+      type: "tool_use";
+      name: string;
+      input?: unknown;
+      /** Hermes hoy no emite id; si lo hiciera, tiene prioridad sobre la cola FIFO. */
+      tool_use_id?: string;
+      call_id?: string;
+      timestamp?: number;
+    }
   | {
       type: "tool_result";
       name: string;
+      tool_use_id?: string;
+      call_id?: string;
       output?: string;
       duration_ms?: number;
       is_error?: boolean;

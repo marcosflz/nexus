@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildSources,
   domainOf,
+  shortDomain,
   extractUrlsFromToolOutput,
+  parseFollowupsBlock,
   parseSourcesBlock,
+  stripFollowupsBlock,
 } from "./sources";
 
 describe("domainOf", () => {
@@ -89,5 +92,58 @@ describe("buildSources", () => {
     ]);
     expect(sources[0].id).toBe(1);
     expect(sources[1].id).toBe(2);
+  });
+});
+
+describe("follow-ups", () => {
+  const text = [
+    "Respuesta [1].",
+    "",
+    "## Sources",
+    "[1] A — https://a.test",
+    "",
+    "## Follow-ups",
+    "- ¿Cuánto cuesta?",
+    "- **¿Y en España?**",
+    "2. ¿Qué alternativas hay?",
+    "",
+    "Texto suelto que ya no es de la lista",
+  ].join("\n");
+
+  it("extrae las preguntas de la lista", () => {
+    expect(parseFollowupsBlock(text)).toEqual([
+      "¿Cuánto cuesta?",
+      "¿Y en España?",
+      "¿Qué alternativas hay?",
+    ]);
+  });
+
+  it("limita a cinco y tolera variantes del encabezado", () => {
+    const many = `x\n\n### Follow ups\n${Array.from({ length: 8 }, (_, i) => `- q${i}`).join("\n")}`;
+    expect(parseFollowupsBlock(many)).toHaveLength(5);
+    expect(parseFollowupsBlock("x\n\n## Followups\n- uno")).toEqual(["uno"]);
+    expect(parseFollowupsBlock("sin bloque")).toEqual([]);
+  });
+
+  it("quita el bloque pero conserva las fuentes", () => {
+    const stripped = stripFollowupsBlock(text);
+    expect(stripped).toContain("## Sources");
+    expect(stripped).not.toContain("Follow-ups");
+    expect(stripped).not.toContain("¿Cuánto cuesta?");
+    expect(stripFollowupsBlock("nada que quitar")).toBe("nada que quitar");
+  });
+
+  it("las fuentes se siguen leyendo con el bloque de follow-ups detrás", () => {
+    expect(parseSourcesBlock(text).map((s) => s.url)).toEqual(["https://a.test"]);
+  });
+});
+
+describe("shortDomain", () => {
+  it("devuelve el nombre corto del dominio", () => {
+    expect(shortDomain("https://es.wikipedia.org/x")).toBe("wikipedia");
+    expect(shortDomain("https://www.reuters.com")).toBe("reuters");
+    expect(shortDomain("https://bbc.co.uk/news")).toBe("bbc");
+    expect(shortDomain("https://localhost:3000")).toBe("localhost");
+    expect(shortDomain("no es url")).toBe("");
   });
 });

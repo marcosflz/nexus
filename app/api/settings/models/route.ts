@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { credentials } from "@/lib/db/schema";
+import { getCredentialRow } from "@/lib/credentials";
 import { getCurrentUser } from "@/lib/auth";
 import { decryptSecret } from "@/lib/crypto";
 import { getProvider } from "@/lib/providers";
@@ -78,14 +76,10 @@ export async function POST(req: NextRequest) {
 
   let apiKey = parsed.data.apiKey?.trim() || null;
   if (!apiKey) {
-    const [row] = await db
-      .select()
-      .from(credentials)
-      .where(eq(credentials.userId, user.id))
-      .limit(1);
+    const row = await getCredentialRow(user.id, providerId);
     // Solo vale la clave guardada si es del mismo proveedor: si el usuario
     // acaba de cambiar en el formulario, esa clave es de otro.
-    if (row && row.provider === providerId && row.apiKeyEnc) {
+    if (row?.apiKeyEnc) {
       try {
         apiKey = decryptSecret(row.apiKeyEnc);
       } catch {

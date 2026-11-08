@@ -6,7 +6,9 @@ import { db } from "@/lib/db";
 import { sessions, users } from "@/lib/db/schema";
 import { hashToken } from "@/lib/crypto";
 
-export const SESSION_COOKIE = "plexo_session";
+export const SESSION_COOKIE = "nexus_session";
+/** Cookie de cuando el proyecto se llamaba Plexo. Solo se lee, nunca se escribe. */
+export const LEGACY_SESSION_COOKIE = "plexo_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface SessionUser {
@@ -50,9 +52,16 @@ export async function destroySession(token: string): Promise<void> {
   await db.delete(sessions).where(eq(sessions.tokenHash, hashToken(token)));
 }
 
+/** Token de sesión de la petición: la cookie nueva o, en su defecto, la heredada. */
+export function readSessionToken(store: {
+  get(name: string): { value: string } | undefined;
+}): string | undefined {
+  return store.get(SESSION_COOKIE)?.value ?? store.get(LEGACY_SESSION_COOKIE)?.value;
+}
+
 export async function getCurrentUser(): Promise<SessionUser | null> {
   const store = await cookies();
-  const token = store.get(SESSION_COOKIE)?.value;
+  const token = readSessionToken(store);
   if (!token) return null;
 
   const rows = await db

@@ -3,7 +3,7 @@
  *
  * `crypto.randomUUID()` solo existe en **contextos seguros** (HTTPS o
  * `localhost`). En un despliegue autoalojado al que se entra por HTTP en la LAN
- * —el caso normal de Plexo— la función no está, y llamarla lanza
+ * —el caso normal de Nexus— la función no está, y llamarla lanza
  * `TypeError: crypto.randomUUID is not a function` dentro del manejador del
  * evento, lo que desmonta el árbol de React y deja la página en blanco.
  *

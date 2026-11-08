@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { getProvider } from "@/lib/providers";
 import type { HermesRawEvent, HermesTokens, TurnEvent } from "./events";
-import { ensureProfile, hermesBin, hermesHome, profileName, workspaceDir } from "./profiles";
+import { ensureProfile, hermesBin, hermesHome, workspaceDirFor } from "./profiles";
 
 export interface RunTurnOptions {
   userId: string;
@@ -24,9 +23,7 @@ export interface RunTurnResult {
 }
 
 export async function runHermesTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
-  await ensureProfile(opts.userId);
-  const profile = profileName(opts.userId);
-  const provider = opts.provider ? getProvider(opts.provider) : undefined;
+  const profile = await ensureProfile(opts.userId);
 
   const args = [
     "-p",
@@ -48,17 +45,19 @@ export async function runHermesTurn(opts: RunTurnOptions): Promise<RunTurnResult
   if (opts.provider) args.push("--provider", opts.provider);
   if (opts.sessionId) args.push("--resume", opts.sessionId);
   if (opts.maxTurns) args.push("--max-turns", String(opts.maxTurns));
+  // El gateway de Hermes ignora las claves del entorno del CLI y solo respeta
+  // --api-key/--base-url (valen para esta ejecución y no se guardan en el perfil).
+  if (opts.apiKey) args.push("--api-key", opts.apiKey);
+  if (opts.baseUrl) args.push("--base-url", opts.baseUrl);
 
   const env: NodeJS.ProcessEnv = { ...process.env, HERMES_HOME: hermesHome() };
-  if (provider?.envVar && opts.apiKey) env[provider.envVar] = opts.apiKey;
-  if (opts.baseUrl) env.OPENAI_BASE_URL = opts.baseUrl;
 
   const child = spawn(
     /* turbopackIgnore: true */
     hermesBin(),
     args,
     {
-      cwd: workspaceDir(opts.userId),
+      cwd: workspaceDirFor(profile),
       env,
       stdio: ["pipe", "pipe", "pipe"],
     },
@@ -75,7 +74,11 @@ export async function runHermesTurn(opts: RunTurnOptions): Promise<RunTurnResult
   };
   opts.signal?.addEventListener("abort", onAbort, { once: true });
 
-  const toolIds = new Map<string, string>();
+  // Hermes no emite id en tool_use/tool_result, así que se emparejan por nombre
+  // con una cola FIFO: dos `web_search` en paralelo ya no se pisan. Si Hermes
+  // empieza a enviar `tool_use_id`/`call_id`, ese id manda sobre la cola.
+  const pendingByName = new Map<string, string[]>();
+  const idsByExternal = new Map<string, string>();
   let toolCounter = 0;
   let sessionId: string | null = opts.sessionId ?? null;
   let accumulated = "";
@@ -110,13 +113,27 @@ export async function runHermesTurn(opts: RunTurnOptions): Promise<RunTurnResult
         break;
       case "tool_use": {
         const id = `t${++toolCounter}`;
-        toolIds.set(raw.name, id);
+        const external = raw.tool_use_id ?? raw.call_id;
+        if (external) {
+          idsByExternal.set(external, id);
+        } else {
+          const queue = pendingByName.get(raw.name) ?? [];
+          queue.push(id);
+          pendingByName.set(raw.name, queue);
+        }
         opts.onEvent({ kind: "tool-start", id, name: raw.name, input: raw.input });
         break;
       }
       case "tool_result": {
-        const id = toolIds.get(raw.name) ?? `t${++toolCounter}`;
-        toolIds.delete(raw.name);
+        const external = raw.tool_use_id ?? raw.call_id;
+        let id: string | undefined;
+        if (external) {
+          id = idsByExternal.get(external);
+          idsByExternal.delete(external);
+        } else {
+          id = pendingByName.get(raw.name)?.shift();
+        }
+        id ??= `t${++toolCounter}`;
         opts.onEvent({
           kind: "tool-end",
           id,

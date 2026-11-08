@@ -1,13 +1,18 @@
 import {
   EventType,
-  PLEXO_SOURCES,
+  LEGACY_SOURCES,
+  NEXUS_FOLLOWUPS,
+  NEXUS_SOURCES,
   type AgUiEvent,
-  type PlexoSourcesPayload,
+  type NexusFollowupsPayload,
+  type NexusSourcesPayload,
 } from "./events";
 import { OPENUI_TOOL_NAME, splitOpenUiBlocks } from "@/lib/openui/blocks";
+import { stripFollowupsBlock } from "@/lib/sources";
 import type {
   UiInterrupt,
   UiMessage,
+  UiPart,
   UiSubagent,
   UiToolCall,
   UiUsage,
@@ -30,6 +35,8 @@ export interface AgUiState {
   rawText: string;
   /** Llamadas a herramientas emitidas por AG-UI (Hermes). */
   toolCalls: UiToolCall[];
+  /** Posición de `rawText` en la que arrancó cada herramienta (para ordenar `parts`). */
+  toolOffsets: Record<string, number>;
 }
 
 export function initialAgUiState(
@@ -53,6 +60,7 @@ export function initialAgUiState(
     interrupts: [],
     rawText: "",
     toolCalls: [],
+    toolOffsets: {},
   };
 }
 
@@ -92,34 +100,56 @@ function parseArgsBestEffort(argsText: string): unknown {
 }
 
 /**
- * Recalcula `content` y `tools` a partir del texto crudo y de las herramientas.
+ * Recalcula `content`, `tools` y `parts` a partir del texto crudo y de las
+ * herramientas.
  *
  * Los bloques OpenUI se derivan del texto, así que su estado es siempre
  * coherente con lo que se ha recibido: no hay una segunda fuente de verdad que
- * pueda desincronizarse.
+ * pueda desincronizarse. El texto se parte en cada herramienta (según el punto
+ * del texto en que arrancó) para conservar el orden real texto → pasos → texto.
  */
 function rebuild(state: AgUiState, patch: Partial<UiMessage> = {}): AgUiState {
-  const segments = splitOpenUiBlocks(state.rawText);
-  const textParts: string[] = [];
+  const parts: UiPart[] = [];
   const openui: UiToolCall[] = [];
+  let openuiIndex = 0;
 
-  for (const segment of segments) {
-    if (segment.type === "text") {
-      textParts.push(segment.text);
-      continue;
+  const pushChunk = (chunk: string) => {
+    for (const segment of splitOpenUiBlocks(chunk)) {
+      if (segment.type === "text") {
+        // El bloque `## Follow-ups` de Hermes es un canal, no contenido para mostrar.
+        const text = stripFollowupsBlock(segment.text.replace(/\n{3,}/g, "\n\n"));
+        if (text) parts.push({ type: "text", text });
+        continue;
+      }
+      const id = `openui-${openuiIndex++}`;
+      openui.push({
+        id,
+        name: OPENUI_TOOL_NAME,
+        kind: "openui",
+        input: { ui: segment.program },
+        argsText: JSON.stringify({ ui: segment.program }),
+        status: segment.closed ? "complete" : "running",
+      });
+      parts.push({ type: "tool", toolId: id });
     }
-    const program = segment.program;
-    openui.push({
-      id: `openui-${segment.index}`,
-      name: OPENUI_TOOL_NAME,
-      kind: "openui",
-      input: { ui: program },
-      argsText: JSON.stringify({ ui: program }),
-      status: segment.closed ? "complete" : "running",
-    });
-  }
+  };
 
-  const content = textParts.join("").replace(/\n{3,}/g, "\n\n");
+  let cursor = 0;
+  for (const tool of state.toolCalls) {
+    const offset = Math.min(
+      Math.max(state.toolOffsets[tool.id] ?? state.rawText.length, cursor),
+      state.rawText.length,
+    );
+    pushChunk(state.rawText.slice(cursor, offset));
+    parts.push({ type: "tool", toolId: tool.id });
+    cursor = offset;
+  }
+  pushChunk(state.rawText.slice(cursor));
+
+  const content = parts
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .join("")
+    .replace(/\n{3,}/g, "\n\n");
 
   return {
     ...state,
@@ -127,6 +157,7 @@ function rebuild(state: AgUiState, patch: Partial<UiMessage> = {}): AgUiState {
       ...state.message,
       content,
       tools: [...state.toolCalls, ...openui],
+      parts,
       ...patch,
     },
   };
@@ -136,6 +167,9 @@ function withTool(state: AgUiState, tool: UiToolCall): AgUiState {
   const exists = state.toolCalls.some((item) => item.id === tool.id);
   return {
     ...state,
+    toolOffsets: exists
+      ? state.toolOffsets
+      : { ...state.toolOffsets, [tool.id]: state.rawText.length },
     toolCalls: exists
       ? state.toolCalls.map((item) => (item.id === tool.id ? { ...item, ...tool } : item))
       : [...state.toolCalls, tool],
@@ -153,9 +187,10 @@ function patchTool(
 export function reduceAgUi(state: AgUiState, event: AgUiEvent): AgUiState {
   switch (event.type) {
     case EventType.RUN_STARTED:
+      // También se emite al reanudar un run en pausa: la pausa ya no está vigente.
       return rebuild(
-        { ...state, runId: event.runId, threadId: event.threadId },
-        { runId: event.runId, status: "running" },
+        { ...state, runId: event.runId, threadId: event.threadId, interrupts: [] },
+        { runId: event.runId, status: "running", interrupts: [] },
       );
 
     case EventType.TEXT_MESSAGE_CONTENT:
@@ -201,13 +236,19 @@ export function reduceAgUi(state: AgUiState, event: AgUiEvent): AgUiState {
           ...tool,
           status: isError ? "error" : "complete",
           durationMs,
+          ...(typeof event.content === "string" && event.content ? { result: event.content } : {}),
         })),
       );
     }
 
     case EventType.CUSTOM: {
-      if (event.name !== PLEXO_SOURCES) return state;
-      const payload = event.value as PlexoSourcesPayload | undefined;
+      if (event.name === NEXUS_FOLLOWUPS) {
+        const payload = event.value as NexusFollowupsPayload | undefined;
+        const questions = (payload?.questions ?? []).filter((q) => typeof q === "string" && q.trim());
+        return rebuild(state, { followups: questions });
+      }
+      if (event.name !== NEXUS_SOURCES && event.name !== LEGACY_SOURCES) return state;
+      const payload = event.value as NexusSourcesPayload | undefined;
       return rebuild(state, { sources: payload?.sources ?? [] });
     }
 
@@ -241,16 +282,21 @@ export function reduceAgUi(state: AgUiState, event: AgUiEvent): AgUiState {
         ? (outcome as { interrupts?: UiInterrupt[] }).interrupts ?? []
         : [];
       const usage = uiUsageFromTokenUsage(event.usage);
+      // Una llamada que espera a la persona (formulario, aprobación) sigue pendiente.
+      const waiting = new Set(interrupts.map((item) => item.toolCallId).filter(Boolean));
       return rebuild(
         {
           ...state,
           interrupts,
           toolCalls: state.toolCalls.map((tool) =>
-            tool.status === "running" ? { ...tool, status: "complete" as const } : tool,
+            tool.status === "running" && !waiting.has(tool.id)
+              ? { ...tool, status: "complete" as const }
+              : tool,
           ),
         },
         {
-          status: "complete",
+          // En pausa el mensaje no está terminado: la UI debe seguir mostrándolo vivo.
+          status: interrupted ? "running" : "complete",
           interrupts,
           ...(usage ? { usage } : {}),
         },

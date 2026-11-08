@@ -54,7 +54,7 @@ export async function recordAction(row: AuditRow): Promise<void> {
       durationMs: row.durationMs ?? null,
     });
   } catch (error) {
-    console.error("[plexo] no se pudo escribir la auditoría", error);
+    console.error("[nexus] no se pudo escribir la auditoría", error);
   }
 }
 

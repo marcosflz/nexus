@@ -1,5 +1,6 @@
+import { readEnv } from "@/lib/env";
 import { openuiEnabled } from "@/lib/flags";
-import { plexoLibrary, plexoPromptOptions } from "./library";
+import { openUiSpec, profileFor, type OpenUiProfile } from "./profiles";
 
 /**
  * Convención con la que el modelo entrega la interfaz.
@@ -36,22 +37,31 @@ const FENCE_CONVENTION = [
   "  que una interfaz rota.",
 ].join("\n");
 
-let cached: string | null = null;
+const cached = new Map<OpenUiProfile, string>();
 
-/** Prompt de OpenUI (especificación de la librería + convención de entrega). */
-export function openuiInstructions(): string {
-  if (cached === null) {
-    cached = `${plexoLibrary.prompt(plexoPromptOptions)}\n\n${FENCE_CONVENTION}`;
+/**
+ * Prompt de OpenUI (especificación del perfil + convención de entrega).
+ *
+ * Por defecto el perfil completo; el BFF elige uno más pequeño según el
+ * contexto (`profileFor`) para no pagar ~13k tokens en cada pregunta.
+ */
+export function openuiInstructions(profile: OpenUiProfile = "full"): string {
+  let text = cached.get(profile);
+  if (text === undefined) {
+    text = `${openUiSpec(profile)}\n\n${FENCE_CONVENTION}`;
+    cached.set(profile, text);
   }
-  return cached;
+  return text;
 }
+
+export { profileFor };
 
 /**
  * Focos donde la UI generativa se activa por defecto. Configurable porque el
  * prompt cuesta tokens del usuario.
  */
 function defaultFocusSet(): Set<string> {
-  const raw = process.env.PLEXO_OPENUI_FOCUS ?? "finance,news";
+  const raw = readEnv("NEXUS_OPENUI_FOCUS", "PLEXO_OPENUI_FOCUS") ?? "finance,news";
   return new Set(
     raw
       .split(",")

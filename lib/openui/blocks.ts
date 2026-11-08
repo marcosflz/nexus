@@ -96,3 +96,14 @@ export function proseOf(text: string): string {
     .join("")
     .replace(/\n{3,}/g, "\n\n");
 }
+
+const WRAPPED_RE = /^\s*```[ \t]*(?:openui|oui)?[ \t]*\n([\s\S]*?)(?:\n[ \t]*```)?\s*$/i;
+
+/**
+ * Programa de un argumento `ui` de `present_openui`. Algunos modelos lo envuelven
+ * en un bloque cercado aunque se les pida el programa a secas; aquí se desenvuelve.
+ */
+export function unwrapOpenUiProgram(ui: string): string {
+  const match = WRAPPED_RE.exec(ui);
+  return (match ? match[1] : ui).trim();
+}

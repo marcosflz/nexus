@@ -14,10 +14,19 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 export PATH="$PATH:/opt/hermes/.venv/bin"
-command -v node >/dev/null 2>&1 || { echo "[plexo] FATAL: node no encontrado" >&2; exit 1; }
+command -v node >/dev/null 2>&1 || { echo "[nexus] FATAL: node no encontrado" >&2; exit 1; }
 
-echo "[plexo] aplicando migraciones..."
+echo "[nexus] aplicando migraciones..."
 node scripts/migrate.mjs
 
-echo "[plexo] arrancando Next.js en :${PORT:-3000}"
+# Renombra los perfiles de Hermes de plexo-* a nexus-* (idempotente; si falla,
+# la app sigue usando el nombre antiguo).
+node scripts/migrate-hermes-profiles.mjs || echo "[nexus] la migración de perfiles falló; se usarán los nombres antiguos" >&2
+
+# Esta versión de Hermes responde por un gateway local. Si lo arrancamos aquí y lo dejamos
+# vivo, la primera pregunta no paga ~20-50 s de arranque en frío ni se apaga por inactividad.
+# Si falla, el CLI sigue levantando uno a demanda, como antes.
+( hermes --profile default gateway run --quiet >/tmp/hermes-gateway.log 2>&1 || true ) &
+
+echo "[nexus] arrancando Next.js en :${PORT:-3000}"
 exec node node_modules/next/dist/bin/next start -p "${PORT:-3000}"

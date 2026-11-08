@@ -1,129 +1,192 @@
-# Plexo
+# Nexus
 
-> _Nombre provisional._ Buscador con IA open source, autoalojado y *bring your own key*: pregunta, busca en la web y obtén respuestas con citas verificables.
+> Buscador con IA open source, autoalojado y *bring your own key*: pregunta, busca en la web y obtén respuestas con citas verificables. Con interfaces generativas interactivas y agentes autónomos que trabajan por su cuenta.
 
-- **Frontend**: Next.js 16 + React 19 + [assistant-ui](https://www.assistant-ui.com/) (primitivas de chat, parts de herramientas y fuentes).
-- **Agente**: [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT) embebido por CLI: un perfil aislado por usuario, `web_search`/`web_extract` y un `SOUL.md` con formato de citas estilo Perplexity.
-- **Búsqueda**: [SearXNG](https://github.com/searxng/searxng) autoalojado (gratis, privado) + extracción de páginas sin clave (Firecrawl keyless).
-- **Datos**: PostgreSQL + Drizzle ORM. Autenticación propia email/contraseña (sesiones con cookie).
-- **Claves**: cada usuario trae su API key; se cifra en el servidor con AES-256-GCM.
-- **Licencia**: MIT. Sin planes, sin cuotas, sin telemetría.
+## Qué hace
+
+**Búsqueda y respuesta**
+
+- Respuestas con citas `[n]` interactivas (tarjeta de fuente al pasar el ratón), panel de fuentes y preguntas relacionadas.
+- *Focus modes* (Web, Académico, Reddit, Finanzas, Noticias), modo **Research** y subida de archivos (PDF, DOCX, TXT, MD, CSV, JSON).
+- Editar un mensaje, regenerar una respuesta, valorarla, renombrar, buscar y borrar chats, y **compartir un chat por enlace** público de solo lectura.
+- Tema claro/oscuro. Los turnos siguen en el servidor aunque cierres la pestaña y se reanudan al recargar.
+
+**Intelligent UI**
+
+- El modelo puede responder con tarjetas, tablas, gráficos o mapas (OpenUI) y **pedirte datos con un formulario**: el turno se pausa, tú lo rellenas y continúa con tus valores.
+
+**Agentes personalizados y autónomos**
+
+- Cada agente tiene nombre, instrucciones, herramientas, modelo, conocimiento (tus documentos, con búsqueda de texto completo y citas), memoria y límites de gasto. Se versionan: cada cambio es una versión nueva y las ejecuciones fijan la suya.
+- `@nombre` en un mensaje o el selector del chat los activan. Los públicos aparecen en una galería compartida.
+- **Trabajan solos**: tareas programadas (cron con zona horaria), webhooks entrantes, vigilancia de feeds RSS y de páginas, y encadenado (un agente arranca cuando otro termina). Lo que hacen aparece en la **bandeja**; toda acción con efectos pide tu **aprobación**.
+- Conectores **MCP** (con secretos cifrados) y, opcionalmente, un **navegador aislado por agente**.
 
 ## Estado
 
-Esqueleto funcional del MVP (octubre 2026):
-
-- [x] Registro/login, sesiones y Ajustes con proveedor + modelo + API key cifrada.
-- [x] Hilos persistentes con historial y barra lateral.
-- [x] Streaming SSE de respuestas con tarjetas de herramientas (`web_search`, `web_extract`) y chips de fuentes.
-- [x] Por usuario: perfil Hermes aislado (sesiones, memoria y configuración propias).
-- [x] Focus modes (Web, Académico, Reddit, Finanzas, Noticias) y modo Research (informe multi-búsqueda).
-- [x] Subida de archivos (PDF, DOCX, TXT, MD, CSV, JSON): el BFF extrae el texto y se inyecta como contexto; sin dar acceso a ficheros al agente.
-- [x] Trazas de herramientas y uso de tokens persistidos por mensaje.
-- [ ] Compartir hilos por enlace, cuotas/coste por usuario, cancelación fina, índices de embeddings.
-
-Ver [`docs/decisiones-mvp.md`](docs/decisiones-mvp.md) para las decisiones de arquitectura, [`docs/proximos-pasos.md`](docs/proximos-pasos.md) para el backlog y [`docs/stack-tecnico.md`](docs/stack-tecnico.md) / [`docs/perplexity-funcionalidades.md`](docs/perplexity-funcionalidades.md) para la investigación completa.
+| | |
+|---|---|
+| Búsqueda, citas, hilos, adjuntos, Research, compartir, edición, valoración | ✅ |
+| Runs duraderos y reanudables (AG-UI), pausa/reanudación, cancelación | ✅ |
+| Motor nas-adk (sidecar) con herramientas propias de la app | ✅ |
+| Agentes: versiones, conocimiento, memoria, galería, `@mención`, presupuestos | ✅ |
+| Autonomía: cron, webhook, RSS, vigilancia, encadenado, bandeja, aprobaciones | ✅ |
+| Conectores MCP | 🟡 alta, validación de URL y cifrado probados de extremo a extremo; la conexión MCP con cabeceras está probada con *mocks* en nas-adk, **no** contra un servidor MCP real |
+| Ordenador por agente (navegador aislado) | 🟡 desplegable con `--profile computer`; la especificación del contenedor está validada contra Docker real, **no** se ha probado con la imagen de Playwright ni hay vista en vivo |
+| Embeddings / pgvector, Model Council, ramas de conversación | ❌ no implementados |
 
 ## Arquitectura
 
 ```
 ┌────────────── Navegador ──────────────┐
-│  Next.js + assistant-ui (Thread,      │
-│  tool UIs, fuentes, composer)         │
+│ Next.js · assistant-ui · shadcn ·     │
+│ prompt-kit · OpenUI                   │
 └──────────────────┬────────────────────┘
-                   │ SSE (/api/chat)
-┌──────────────────▼────────────────────┐
-│  BFF Next.js (route handlers)         │
-│  auth · hilos · ajustes · cifrado     │
-│  traduce JSONL de Hermes → SSE        │
-└───────┬───────────────────────┬───────┘
-        │ spawn hermes CLI       │ SQL
-┌───────▼───────────────┐  ┌────▼────────┐
-│  Hermes Agent          │  │ PostgreSQL  │
-│  perfil por usuario    │  └─────────────┘
-│  web_search / extract  │
-└───────┬────────────────┘
-        │
-┌───────▼────────┐
-│  SearXNG       │
-└────────────────┘
+                   │ SSE AG-UI  (/api/chat · /api/runs/:id/events?after=seq)
+┌──────────────────▼────────────────────┐        ┌──────────────┐
+│ BFF Next.js                           │  SQL   │ PostgreSQL   │
+│  auth · runs durables · worker (cola) │◄──────►│ runs, eventos│
+│  política · auditoría · aprobaciones  │        │ agentes, …   │
+└───────┬─────────────────────┬─────────┘        └──────────────┘
+        │ CLI por turno       │ HTTP firmado (secreto + HMAC)
+┌───────▼────────┐   ┌────────▼─────────────┐ MCP  ┌────────────────────┐
+│ Hermes Agent   │   │ Sidecar de agentes   │─────►│ Conectores MCP     │
+│ (buscador)     │   │ (nas-adk · FastAPI)  │─────►│ Navegador del      │
+└───────┬────────┘   └────────┬─────────────┘      │ agente (opcional)  │
+        └──────────┬──────────┘                     └────────────────────┘
+            ┌──────▼──────┐
+            │  SearXNG    │
+            └─────────────┘
 ```
 
-En el contenedor de la app conviven Next.js y el CLI de Hermes (la imagen se basa en `nousresearch/hermes-agent`). Cada turno se ejecuta como:
-
-```
-hermes -p plexo-<userId> chat --oneshot --query-file - --format stream-json \
-  --toolsets web,skills --source tool --model <modelo> [--provider <proveedor>]
-```
-
-con la clave del usuario inyectada en el entorno del proceso. El BFF traduce los eventos JSONL (`system`/`text`/`tool_use`/`tool_result`/`result`) al contrato SSE que consume la UI, y persiste texto + fuentes.
+- **Dos motores tras una misma interfaz** (`lib/agents/backend.ts`): Hermes (CLI, el buscador clásico) y **nas-adk** (sidecar Python sin estado, en `services/agent/`). Un agente elige el suyo.
+- **Un protocolo**: AG-UI. Cada evento se numera (`seq`), se **guarda y después se publica**; cualquiera puede engancharse con `GET /api/runs/:id/events?after=<seq>` y recibe el backlog más el directo sin huecos ni duplicados.
+- **El sidecar no tiene base de datos ni estado**: recibe el agente, la credencial y el historial en cada petición y llama al BFF (con un token de run firmado, de corta vida) para la política, el conocimiento, la memoria y la validación de OpenUI. Al pausarse devuelve un *checkpoint* que el BFF guarda.
+- **Política fail-closed** (`deny > ask > allow`) evaluada *antes* de cada herramienta, con auditoría previa al efecto. Las rutinas (sin nadie delante) piden aprobación para cualquier acción con efectos.
 
 ## Quickstart (Docker)
 
 ```bash
-# 1. Genera el secreto de cifrado
+# 1. Secretos
 cp .env.example .env
-echo "APP_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env
+echo "APP_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env   # cifra las API keys y los secretos de conectores
+echo "NEXUS_AGENT_SECRET=$(openssl rand -hex 32)" >> .env   # app ⇄ sidecar de agentes
 
-# 2. Levanta todo (app + Postgres + SearXNG)
+# 2. nas-adk vive en su propio repositorio (hermano de este) y se monta al construir el sidecar
+git clone <url-de-nas-adk> ../nas-adk        # o define NAS_ADK_PATH en .env
+
+# 3. Levanta todo (app + sidecar + Postgres + SearXNG)
 docker compose up -d --build
 
-# 3. Abre http://localhost:3000, crea una cuenta y configura tu API key
-#    en Ajustes (p. ej. OpenRouter).
+# 4. Abre http://localhost:3000, crea una cuenta y guarda tu API key en Ajustes
 ```
 
-Puertos por defecto: app `3000` (`APP_PORT=3010 docker compose up -d` para cambiarlo),
-Postgres `127.0.0.1:5433`, SearXNG `127.0.0.1:8888`.
+Puertos por defecto: app `3000` (`APP_PORT=3010 docker compose up -d` para cambiarlo, o ponlo en `.env`), Postgres `127.0.0.1:5433`, SearXNG `127.0.0.1:8888`. El sidecar solo es accesible desde la red de Compose.
 
-> La imagen de la app hereda la imagen oficial de Hermes (incluye Chromium y Python), por lo que el primer build tarda y pesa varios GB.
+La imagen de la app hereda la de Hermes (incluye Chromium y Python): el primer build tarda y pesa varios GB.
+
+### Ordenador por agente (opcional)
+
+```bash
+docker pull mcr.microsoft.com/playwright/mcp:latest      # sandboxd no descarga imágenes
+echo "NEXUS_SANDBOXD_URL=http://sandboxd:8095" >> .env
+docker compose --profile computer up -d --build
+```
+
+Arranca `sandboxd` y un proxy del socket de Docker que **solo** permite rutas de contenedores y volúmenes (sandboxd nunca monta `docker.sock`). Cada agente con «Ordenador» activado tiene su contenedor y su volumen: sin puertos publicados, sin capacidades, sistema de ficheros de solo lectura, límites de memoria/CPU/procesos y en su propia red. Leer páginas es libre; pulsar, escribir o enviar pide aprobación; el agente puede **soltar el control** a una persona.
+
+> ⚠️ El navegador **no** filtra su tráfico de salida a nivel de red: `--blocked-origins` ayuda pero Playwright lo documenta como *no* una barrera de seguridad, y un contenedor Docker puede alcanzar tu LAN por NAT. Si el agente va a navegar páginas no confiables, añade reglas en la cadena `DOCKER-USER` de iptables que bloqueen desde la red `nexus-sandbox` los rangos privados y `169.254.169.254`.
 
 ## Desarrollo local
 
-Requisitos: Node 20+, Docker, y el CLI de Hermes instalado en el host
-(`curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`).
+Requisitos: Node 20+, Docker, y el CLI de Hermes en el host (`curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`). Para el sidecar: `uv` y el repositorio de nas-adk.
 
 ```bash
-docker compose up -d db searxng      # Postgres en :5432, SearXNG en :8888
+docker compose up -d db searxng           # Postgres en :5433, SearXNG en :8888
 npm install
 export APP_ENCRYPTION_KEY=$(openssl rand -hex 32)
-export DATABASE_URL=postgres://plexo:plexo@localhost:5432/plexo
+export DATABASE_URL=postgres://plexo:plexo@localhost:5433/plexo
 export SEARXNG_URL=http://localhost:8888
 npm run migrate
-npm run dev                          # http://localhost:3000
+npm run dev                               # http://localhost:3000
+
+# Sidecar de agentes (opcional, para el motor nas-adk)
+cd services/agent && uv sync --extra dev
+NEXUS_AGENT_SECRET=dev SEARXNG_URL=http://localhost:8888 \
+  .venv/bin/uvicorn nexus_agent.app:app_factory --factory --port 8090
+# y en la app:  NEXUS_AGENT_URL=http://127.0.0.1:8090 NEXUS_AGENT_SECRET=dev NEXUS_INTERNAL_URL=http://127.0.0.1:3000
 ```
 
-En local, Hermes usa `./.hermes-data` como `HERMES_HOME` (ignorado por git) y crea
-un perfil por usuario. Para usar tu instalación existente: `HERMES_HOME=~/.hermes`.
+Tests: `npm test` · `npm run typecheck` · `npm run build` · `cd services/agent && .venv/bin/python -m pytest` · `cd services/sandboxd && .venv/bin/python -m pytest`.
 
-Scripts: `npm run dev` · `npm run build` · `npm run start` · `npm run migrate` · `npm run typecheck` · `npm test`
+## Variables de entorno
+
+| Variable | Para qué |
+|---|---|
+| `APP_ENCRYPTION_KEY` | **Obligatoria.** Cifra API keys y secretos de conectores (AES-256-GCM). |
+| `NEXUS_AGENT_SECRET` | Secreto compartido app ⇄ sidecar. Sin él, el motor nas-adk queda desactivado. |
+| `NEXUS_AGENT_URL` / `NEXUS_INTERNAL_URL` | URL del sidecar / URL con la que el sidecar vuelve al BFF. |
+| `NEXUS_BACKEND_DEFAULT` | `hermes` (por defecto) o `nas-adk`. |
+| `NEXUS_MAX_CONCURRENT_RUNS` | Runs simultáneos (4). Los trabajos sobrantes esperan en cola. |
+| `NEXUS_WORKER` | `off` desactiva el planificador (cron, RSS, cola de trabajos). |
+| `NEXUS_ALLOW_PRIVATE_CONNECTORS` | Permite conectores MCP en red privada o `http`. **Desactivado por defecto** (evita SSRF). |
+| `NEXUS_SANDBOXD_URL` | Activa el ordenador por agente (perfil `computer`). |
+| `NEXUS_OPENUI`, `NEXUS_OPENUI_FOCUS`, `NEXUS_APPROVALS` | Interruptores de interfaz generativa y aprobaciones. |
+| `APP_URL` | URL pública (enlaces compartidos, webhooks). |
+
+Las variables `PLEXO_*` (nombre anterior) siguen funcionando como alias.
 
 ## Estructura
 
 ```
-app/                    # páginas (chat, login, register, settings) y API routes
-  api/auth/*            # registro, login, logout
-  api/chat              # SSE: spawn de Hermes + traducción de eventos + persistencia
-  api/settings          # proveedor/modelo/api key cifrada
-  api/threads/*         # CRUD de hilos e historial
-components/chat/        # UI (assistant-ui): thread, tool UIs, fuentes, sidebar, ajustes
-lib/hermes/             # perfiles y runner del CLI de Hermes
-lib/db/                 # esquema Drizzle y cliente Postgres
-lib/auth.ts             # sesiones con cookie (scrypt + SHA-256)
-lib/crypto.ts           # AES-256-GCM para API keys
-lib/sources.ts          # extracción de fuentes y parseo del bloque `## Sources`
+app/                    # páginas (chat, agentes, bandeja, uso, ajustes, /s/<enlace>) y API routes
+  api/chat              # crea el run (o lo reanuda) y devuelve su SSE
+  api/runs/[id]/*       # eventos reanudables por seq y cancelación
+  api/agents/*          # CRUD, versiones, conocimiento, disparadores, ejecutar ahora
+  api/internal/*        # callbacks del sidecar (política, conocimiento, memoria, OpenUI)
+  api/hooks/*           # webhooks públicos
+components/             # chat (assistant-ui), agentes, bandeja, ui/ (shadcn + prompt-kit)
+lib/agents/             # interfaz AgentBackend, motores, spec, versiones, presupuestos
+lib/agui/               # eventos AG-UI, reducer puro y cliente SSE con reconexión
+lib/runs/               # ejecutor, bus, tail SSE, store, rutinas
+lib/worker/ lib/triggers/  # cola de trabajos (SKIP LOCKED), cron, RSS, vigilancia, webhooks
+lib/policy/ lib/audit/  # motor de políticas, gateway y auditoría
+lib/knowledge/ lib/memory/ lib/connectors/ lib/sandbox/
+services/agent/         # sidecar Python (nas-adk)
+services/sandboxd/      # gestor de navegadores aislados
 scripts/migrate.mjs     # DDL idempotente
-docker/                 # Dockerfile y script de arranque
-searxng/settings.yml    # SearXNG con API JSON habilitada
-docs/                   # investigación de Perplexity, stack y decisiones
 ```
 
-## Limitaciones conocidas (MVP)
+## Seguridad
 
-- El CLI de Hermes arranca en frío en cada turno (varios segundos); la sesión se reanuda con `--resume`.
-- SSE sin replay: si se recarga a mitad de respuesta, se pierde el parcial (el historial persistido sí queda).
-- Los adjuntos se extraen a texto (recortado a ~100 000 caracteres) y se inyectan en el prompt: los PDF escaneados sin capa de texto no funcionan todavía.
-- `--yolo` está activo porque el agente corre sin TTY, pero los toolsets están limitados a `web,skills` (sin terminal ni acceso a ficheros).
-- Sin multi-nodo/colas: pensado para una instancia self-hosted.
+- Contraseñas con scrypt; sesiones con token aleatorio (solo se guarda su SHA-256) y cookie `httpOnly`.
+- API keys y secretos de conectores cifrados en reposo; el sidecar los recibe por petición firmada y no los registra.
+- Las rutas `/api/internal/*` solo aceptan el token de run firmado, atado a run y usuario, y solo mientras el run sigue en marcha.
+- Toda URL que el servidor o el agente consultan pasa una guardia SSRF (resolución DNS y rechazo de redes privadas en cada redirección).
+- El contenido externo (webhooks, feeds, páginas vigiladas) se marca como **dato no confiable** para el modelo.
+- Los enlaces compartidos solo exponen texto y fuentes, llevan `noindex` y se pueden retirar.
+
+## Limitaciones conocidas
+
+- **Una sola instancia de la app**: el bus de eventos y el ejecutor son de un solo proceso (haría falta LISTEN/NOTIFY).
+- El CLI de Hermes arranca en frío en cada turno; el motor nas-adk no tiene ese coste.
+- Los adjuntos y el conocimiento se extraen como texto: los PDF escaneados (sin capa de texto) no funcionan.
+- La búsqueda en el conocimiento es de **texto completo** (palabras), no semántica.
+- El texto de un agente público incluye su conocimiento: quien lo use puede consultarlo (no descargar los ficheros).
+- Para OpenCode Go, Hermes y nas-adk usan URLs base distintas; si la de nas-adk no acepta tu clave, indica la correcta en el campo «URL base» de Ajustes.
+
+## Migrar desde Plexo
+
+El proyecto se llamaba Plexo. Al actualizar no se pierde nada:
+
+- **Volúmenes**: `docker-compose.yml` fija `plexo_db-data` y `plexo_hermes-data` como nombres de volumen. El usuario y la base de datos de Postgres siguen llamándose `plexo`.
+- **Contenedores**: ahora son `nexus-*`. Si tienes los antiguos, `docker compose -p plexo down` (sin `-v`) y luego `docker compose up -d --build`.
+- **Perfiles de Hermes**: al arrancar, `scripts/migrate-hermes-profiles.mjs` renombra `plexo-<hash>` a `nexus-<hash>` (idempotente; si no pudiera, la app usa el nombre antiguo).
+- **Sesión**: la cookie pasa a `nexus_session`; `plexo_session` se sigue aceptando hasta que caduque.
+
+## Documentación
+
+[`docs/decisiones-mvp.md`](docs/decisiones-mvp.md) (decisiones y su porqué) · [`docs/proximos-pasos.md`](docs/proximos-pasos.md) (backlog) · [`docs/stack-tecnico.md`](docs/stack-tecnico.md) y [`docs/perplexity-funcionalidades.md`](docs/perplexity-funcionalidades.md) (investigación).
 
 ## Licencia
 

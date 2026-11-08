@@ -6,7 +6,7 @@
  * que las reglas estén declaradas.
  */
 
-export type ActionKind = "web" | "browser" | "file" | "terminal" | "agent";
+export type ActionKind = "web" | "browser" | "file" | "terminal" | "agent" | "connector";
 
 export interface ActionTarget {
   url?: string;

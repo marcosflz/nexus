@@ -1,5 +1,5 @@
 # Imagen base oficial de Hermes (incluye el CLI `hermes`, Python y Node 26).
-# Plexo embebe el CLI: cada turno se ejecuta con el perfil del usuario y su key.
+# Nexus embebe el CLI: cada turno se ejecuta con el perfil del usuario y su key.
 FROM nousresearch/hermes-agent:latest
 
 USER root

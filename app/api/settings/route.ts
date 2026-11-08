@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { credentials } from "@/lib/db/schema";
 import { getCurrentUser } from "@/lib/auth";
+import { deleteCredential, getCredentialRow, listCredentials, saveCredential } from "@/lib/credentials";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { getProvider, PROVIDERS } from "@/lib/providers";
 
@@ -20,11 +18,8 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-  const [row] = await db
-    .select()
-    .from(credentials)
-    .where(eq(credentials.userId, user.id))
-    .limit(1);
+  const rows = await listCredentials(user.id);
+  const row = rows[0];
 
   return NextResponse.json({
     providers: PROVIDERS.map(({ id, label, needsKey, defaultModel, modelsUrl }) => ({
@@ -42,6 +37,14 @@ export async function GET() {
           hasKey: Boolean(row.apiKeyEnc),
         }
       : null,
+    // Una entrada por proveedor ya configurado, para recordar clave y modelo al cambiar.
+    saved: rows.map((item) => ({
+      provider: item.provider,
+      model: item.model,
+      baseUrl: item.baseUrl,
+      hasKey: Boolean(item.apiKeyEnc),
+      isDefault: item.isDefault,
+    })),
   });
 }
 
@@ -60,11 +63,7 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Proveedor no soportado" }, { status: 400 });
   }
   if (info.needsKey && !apiKey) {
-    const [existing] = await db
-      .select({ apiKeyEnc: credentials.apiKeyEnc })
-      .from(credentials)
-      .where(eq(credentials.userId, user.id))
-      .limit(1);
+    const existing = await getCredentialRow(user.id, provider);
     if (!existing?.apiKeyEnc) {
       return NextResponse.json(
         { error: "Este proveedor requiere una API key" },
@@ -73,36 +72,23 @@ export async function PUT(req: NextRequest) {
     }
   }
 
-  const apiKeyEnc =
-    apiKey && apiKey.trim().length > 0 ? encryptSecret(apiKey.trim()) : undefined;
-
-  await db
-    .insert(credentials)
-    .values({
-      userId: user.id,
-      provider,
-      model,
-      apiKeyEnc,
-      baseUrl: baseUrl && baseUrl.length > 0 ? baseUrl : null,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: credentials.userId,
-      set: {
-        provider,
-        model,
-        ...(apiKeyEnc ? { apiKeyEnc } : {}),
-        baseUrl: baseUrl && baseUrl.length > 0 ? baseUrl : null,
-        updatedAt: new Date(),
-      },
-    });
+  await saveCredential({
+    userId: user.id,
+    provider,
+    model,
+    apiKeyEnc: apiKey && apiKey.trim().length > 0 ? encryptSecret(apiKey.trim()) : undefined,
+    baseUrl: baseUrl && baseUrl.length > 0 ? baseUrl : null,
+  });
 
   return NextResponse.json({ ok: true });
 }
 
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-  await db.delete(credentials).where(eq(credentials.userId, user.id));
+
+  const provider = req.nextUrl.searchParams.get("provider");
+  if (!provider) return NextResponse.json({ error: "Indica el proveedor" }, { status: 400 });
+  await deleteCredential(user.id, provider);
   return NextResponse.json({ ok: true });
 }
