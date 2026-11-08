@@ -3,10 +3,10 @@
 import { createContext, useContext } from "react";
 import type { ProjectSummary, ThreadSummary } from "@/components/chat/types";
 
-export type SettingsSection = "account" | "preferences" | "models" | "connectors" | "usage";
+export type SettingsSection = "account" | "preferences" | "models" | "connectors" | "usage" | "users";
 
 export interface ShellContextValue {
-  user: { id: string; email: string };
+  user: { id: string; email: string; role: "admin" | "user" };
   threads: ThreadSummary[];
   projects: ProjectSummary[];
   /** Hilo abierto en la portada (`/`). null = portada vacía («¿Qué quieres saber?»). */

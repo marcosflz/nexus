@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { approvals, messages, threads } from "@/lib/db/schema";
 import { getCredentialRow } from "@/lib/credentials";
+import { getUserAccess } from "@/lib/users";
 import { decryptSecret } from "@/lib/crypto";
 import type { AgUiEvent } from "@/lib/agui/events";
 import type { BackendCredential, HistoryMessage, ResumeItem } from "@/lib/agents/backend";
@@ -27,6 +28,10 @@ const fail = (status: number, error: string, code?: string): Launch<never> => ({
  * predeterminada; con él, la de ese proveedor (un agente puede fijar uno).
  */
 export async function loadCredential(userId: string, provider?: string | null): Promise<Launch<BackendCredential>> {
+  // También cubre rutinas y webhooks, que se ejecutan sin una sesión de por medio.
+  const access = await getUserAccess(userId);
+  if (!access || access.disabled) return fail(403, "Esta cuenta está desactivada", "account_disabled");
+
   const row = await getCredentialRow(userId, provider);
   if (!row) {
     return provider

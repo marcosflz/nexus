@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 
 interface Props {
   mode: "login" | "register";
+  /** La instancia aún no tiene cuentas: se puede crear la primera. */
+  canRegister?: boolean;
 }
 
 const COPY = {
@@ -20,12 +22,12 @@ const COPY = {
     busy: "Entrando…",
     fallbackError: "No se pudo iniciar sesión",
     next: "/",
-    alt: { text: "¿No tienes cuenta?", link: "Crear una", href: "/register" },
+    alt: { text: "Instalación nueva.", link: "Crear la cuenta de administrador", href: "/register" },
     autoComplete: "current-password",
   },
   register: {
-    title: "Crea tu cuenta en Nexus",
-    description: "Necesitarás tu propia API key de un proveedor (OpenRouter, OpenAI, Anthropic…).",
+    title: "Crea la cuenta de administrador",
+    description: "Es la primera cuenta de esta instalación. Desde ella podrás crear las de los demás.",
     endpoint: "/api/auth/register",
     submit: "Crear cuenta",
     busy: "Creando…",
@@ -37,7 +39,7 @@ const COPY = {
 } as const;
 
 /** Formulario compartido de acceso y registro. */
-export function AuthForm({ mode }: Props) {
+export function AuthForm({ mode, canRegister = false }: Props) {
   const copy = COPY[mode];
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -104,12 +106,16 @@ export function AuthForm({ mode }: Props) {
           {busy ? copy.busy : copy.submit}
         </Button>
       </form>
-      <p className="text-muted-fg mt-6 text-sm">
-        {copy.alt.text}{" "}
-        <Link href={copy.alt.href} className="text-fg underline underline-offset-4">
-          {copy.alt.link}
-        </Link>
-      </p>
+      {mode === "login" && !canRegister ? (
+        <p className="text-muted-fg mt-6 text-sm">Las cuentas las crea un administrador.</p>
+      ) : (
+        <p className="text-muted-fg mt-6 text-sm">
+          {copy.alt.text}{" "}
+          <Link href={copy.alt.href} className="text-fg underline underline-offset-4">
+            {copy.alt.link}
+          </Link>
+        </p>
+      )}
     </main>
   );
 }

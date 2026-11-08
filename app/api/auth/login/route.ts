@@ -25,6 +25,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Credenciales incorrectas" }, { status: 401 });
   }
 
+  // Solo se revela que está desactivada a quien ya ha demostrado conocer la contraseña.
+  if (user.disabledAt) {
+    return NextResponse.json({ error: "Esta cuenta está desactivada" }, { status: 403 });
+  }
+
+  await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
   const { token, expiresAt } = await createSession(user.id);
   const res = NextResponse.json({ user: { id: user.id, email: user.email } });
   res.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(req, expiresAt));

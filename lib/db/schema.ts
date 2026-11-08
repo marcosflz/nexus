@@ -41,6 +41,13 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  /** `admin` gestiona usuarios; `user` solo usa la app. */
+  role: text("role").$type<"admin" | "user">().notNull().default("user"),
+  /** Si tiene valor, la cuenta no puede entrar ni ejecutar agentes. */
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  /** Un admin le ha concedido usar la suscripción de Claude Code de la instancia. */
+  canUseClaudeCode: boolean("can_use_claude_code").notNull().default(false),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
 });
 
 export const sessions = pgTable("sessions", {

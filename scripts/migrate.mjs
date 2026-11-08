@@ -378,6 +378,28 @@ try {
   // (sin uso) para poder volver atrás; se borrará en una migración posterior.
   await sql`UPDATE threads SET backend = 'nas-adk' WHERE backend = 'hermes'`;
 
+  // Usuarios gestionados por admins: no hay registro libre.
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user'`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at timestamptz`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS can_use_claude_code boolean NOT NULL DEFAULT false`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at timestamptz`;
+
+  // NEXUS_ADMIN_EMAILS: cuentas que son admin en cada arranque (así se recupera el acceso).
+  const adminEmails = (process.env.NEXUS_ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+  if (adminEmails.length > 0) {
+    await sql`UPDATE users SET role = 'admin' WHERE lower(email) IN ${sql(adminEmails)}`;
+  }
+  const [{ total, admins }] = await sql`
+    SELECT count(*)::int AS total,
+           count(*) FILTER (WHERE role = 'admin' AND disabled_at IS NULL)::int AS admins
+    FROM users`;
+  if (total > 0 && admins === 0) {
+    console.warn("[nexus] AVISO: no hay ningún admin activo. Define NEXUS_ADMIN_EMAILS con el correo de una cuenta.");
+  }
+
   // Un run que quedó `running` cuando el proceso murió nunca terminó: se
   // reconcilia al arrancar en vez de dejar la UI en un spinner eterno.
   await sql`

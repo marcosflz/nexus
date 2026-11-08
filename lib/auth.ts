@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
 import type { NextRequest } from "next/server";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { sessions, users } from "@/lib/db/schema";
 import { hashToken } from "@/lib/crypto";
@@ -14,6 +14,8 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export interface SessionUser {
   id: string;
   email: string;
+  role: "admin" | "user";
+  canUseClaudeCode: boolean;
 }
 
 // La cookie solo lleva `Secure` si la petición llega por HTTPS. Con
@@ -65,16 +67,32 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
   if (!token) return null;
 
   const rows = await db
-    .select({ id: users.id, email: users.email })
+    .select({
+      id: users.id,
+      email: users.email,
+      role: users.role,
+      canUseClaudeCode: users.canUseClaudeCode,
+    })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
     .where(
       and(
         eq(sessions.tokenHash, hashToken(token)),
         gt(sessions.expiresAt, new Date()),
+        isNull(users.disabledAt),
       ),
     )
     .limit(1);
 
   return rows[0] ?? null;
+}
+
+/** Usuario admin de la petición, o la respuesta de error que hay que devolver. */
+export async function requireAdmin(): Promise<{ user: SessionUser } | { response: Response }> {
+  const user = await getCurrentUser();
+  if (!user) return { response: Response.json({ error: "No autenticado" }, { status: 401 }) };
+  if (user.role !== "admin") {
+    return { response: Response.json({ error: "Solo para administradores" }, { status: 403 }) };
+  }
+  return { user };
 }

@@ -77,7 +77,7 @@ git clone <url-de-nas-adk> ../nas-adk        # o define NAS_ADK_PATH en .env
 # 3. Levanta todo (app + sidecar + Postgres + SearXNG)
 docker compose up -d --build
 
-# 4. Abre http://localhost:3000, crea una cuenta y guarda tu API key en Ajustes
+# 4. Abre http://localhost:3000, crea la cuenta de administrador y guarda tu API key en Ajustes
 ```
 
 Puertos por defecto: app `3000` (`APP_PORT=3010 docker compose up -d` para cambiarlo, o ponlo en `.env`), Postgres `127.0.0.1:5433`, SearXNG `127.0.0.1:8888`. El sidecar solo es accesible desde la red de Compose.
@@ -125,6 +125,7 @@ Tests: `npm test` · `npm run typecheck` · `npm run build` · `cd services/agen
 | `NEXUS_AGENT_SECRET` | **Obligatoria.** Secreto compartido app ⇄ sidecar. Sin él no se pueden ejecutar turnos. |
 | `NEXUS_AGENT_URL` / `NEXUS_INTERNAL_URL` | URL del sidecar / URL con la que el sidecar vuelve al BFF. |
 | `NEXUS_AGENT_CONTEXT_TOKENS` | Contexto máximo por llamada al modelo en el sidecar (64000). |
+| `NEXUS_ADMIN_EMAILS` | Correos que son admin en cada arranque (recuperación de acceso). |
 | `NEXUS_MAX_CONCURRENT_RUNS` | Runs simultáneos (4). Los trabajos sobrantes esperan en cola. |
 | `NEXUS_WORKER` | `off` desactiva el planificador (cron, RSS, cola de trabajos). |
 | `NEXUS_ALLOW_PRIVATE_CONNECTORS` | Permite conectores MCP en red privada o `http`. **Desactivado por defecto** (evita SSRF). |
@@ -157,6 +158,7 @@ scripts/migrate.mjs     # DDL idempotente
 
 ## Seguridad
 
+- Sin registro libre: la primera cuenta nace admin y los admins gestionan el resto en Ajustes → Usuarios. Desactivar una cuenta cierra sus sesiones y detiene sus rutinas.
 - Contraseñas con scrypt; sesiones con token aleatorio (solo se guarda su SHA-256) y cookie `httpOnly`.
 - API keys y secretos de conectores cifrados en reposo; el sidecar los recibe por petición firmada y no los registra.
 - Las rutas `/api/internal/*` solo aceptan el token de run firmado, atado a run y usuario, y solo mientras el run sigue en marcha.

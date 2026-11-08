@@ -25,6 +25,8 @@ services:
       NEXUS_AGENT_SECRET: ${NEXUS_AGENT_SECRET}
       NEXUS_AGENT_CONTEXT_TOKENS: ${NEXUS_AGENT_CONTEXT_TOKENS:-64000}
       NEXUS_INTERNAL_URL: http://app:3000
+      # Correos (separados por comas) que son admin en cada arranque.
+      NEXUS_ADMIN_EMAILS: ${NEXUS_ADMIN_EMAILS:-}
       # Solo si se despliega el perfil «computer»: gestor de los navegadores de los agentes.
       NEXUS_SANDBOXD_URL: ${NEXUS_SANDBOXD_URL:-}
     depends_on:

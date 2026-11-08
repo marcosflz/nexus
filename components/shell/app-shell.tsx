@@ -11,7 +11,7 @@ import { ShellDialogs, type ProjectDialogState } from "./dialogs";
 import { SearchDialog } from "./search-dialog";
 import { ShellContext, type SettingsSection, type ShellContextValue } from "./shell-context";
 
-const SECTIONS: SettingsSection[] = ["account", "preferences", "models", "connectors", "usage"];
+const SECTIONS: SettingsSection[] = ["account", "preferences", "models", "connectors", "usage", "users"];
 
 function sectionFromHash(hash: string): SettingsSection | null {
   if (!hash.startsWith("#settings")) return null;
@@ -26,7 +26,7 @@ export function AppShell({
   sidebarOpen,
   children,
 }: {
-  user: { id: string; email: string };
+  user: { id: string; email: string; role: "admin" | "user" };
   initialThreads: ThreadSummary[];
   initialProjects: ProjectSummary[];
   sidebarOpen: boolean;

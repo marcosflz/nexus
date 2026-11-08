@@ -1,12 +1,13 @@
-import { BarChart3, Bot, CircleUser, Inbox, KeyRound, Plug, SlidersHorizontal, type LucideIcon } from "lucide-react";
+import { BarChart3, Bot, CircleUser, Inbox, KeyRound, Plug, SlidersHorizontal, Users, type LucideIcon } from "lucide-react";
 import type { SettingsSection } from "@/components/shell/shell-context";
 
 export interface SettingsNavItem {
   id: SettingsSection;
   label: string;
   icon: LucideIcon;
-  group: "Cuenta" | "Agentes";
+  group: "Cuenta" | "Agentes" | "Administración";
   keywords: string;
+  adminOnly?: boolean;
 }
 export interface SettingsNavLink {
   href: string;
@@ -21,6 +22,7 @@ export const SETTINGS_ITEMS: SettingsNavItem[] = [
   { id: "models", label: "Modelos y claves", icon: KeyRound, group: "Cuenta", keywords: "proveedor api key clave modelo openrouter openai anthropic base url local" },
   { id: "usage", label: "Uso", icon: BarChart3, group: "Cuenta", keywords: "tokens ejecuciones consumo actividad" },
   { id: "connectors", label: "Conectores", icon: Plug, group: "Agentes", keywords: "mcp servidor herramientas integraciones" },
+  { id: "users", label: "Usuarios", icon: Users, group: "Administración", keywords: "cuentas admin administrador permisos contraseña claude code", adminOnly: true },
 ];
 
 export const SETTINGS_LINKS: SettingsNavLink[] = [

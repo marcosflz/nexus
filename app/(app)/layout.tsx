@@ -18,7 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const sidebarOpen = store.get("sidebar_state")?.value !== "false";
   return (
     <AppShell
-      user={{ id: user.id, email: user.email }}
+      user={{ id: user.id, email: user.email, role: user.role }}
       initialThreads={threads}
       initialProjects={projects}
       sidebarOpen={sidebarOpen}

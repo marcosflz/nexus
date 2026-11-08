@@ -5,7 +5,7 @@ import { useState } from "react";
 import { ExternalLink, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { SettingsSection } from "@/components/shell/shell-context";
+import { useShell, type SettingsSection } from "@/components/shell/shell-context";
 import { matchesSettings } from "@/lib/settings-search";
 import { cn } from "@/lib/utils";
 import { SETTINGS_ITEMS, SETTINGS_LINKS } from "./sections";
@@ -14,6 +14,7 @@ import { ConnectorsSection } from "./sections/connectors-section";
 import { ModelsSection } from "./sections/models-section";
 import { PreferencesSection } from "./sections/preferences-section";
 import { UsageSection } from "./sections/usage-section";
+import { UsersSection } from "./sections/users-section";
 
 const NAV_BTN =
   "flex h-9 w-full items-center gap-2.5 rounded-lg px-3 text-[15px] transition-colors [&_svg]:size-[18px]";
@@ -32,9 +33,12 @@ export function SettingsView({
   onClose?: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const items = SETTINGS_ITEMS.filter((i) => matchesSettings(query, i.label, i.keywords));
+  const { user } = useShell();
+  const isAdmin = user.role === "admin";
+  const allowed = SETTINGS_ITEMS.filter((i) => !i.adminOnly || isAdmin);
+  const items = allowed.filter((i) => matchesSettings(query, i.label, i.keywords));
   const links = SETTINGS_LINKS.filter((l) => matchesSettings(query, l.label, l.keywords));
-  const groups = (["Cuenta", "Agentes"] as const)
+  const groups = (["Cuenta", "Agentes", "Administración"] as const)
     .map((group) => ({ group, items: items.filter((i) => i.group === group) }))
     .filter((g) => g.items.length > 0);
 
@@ -97,7 +101,7 @@ export function SettingsView({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {SETTINGS_ITEMS.map((item) => (
+              {allowed.map((item) => (
                 <SelectItem key={item.id} value={item.id}>
                   {item.label}
                 </SelectItem>
@@ -115,6 +119,7 @@ export function SettingsView({
         {section === "models" ? <ModelsSection /> : null}
         {section === "connectors" ? <ConnectorsSection /> : null}
         {section === "usage" ? <UsageSection /> : null}
+        {section === "users" && isAdmin ? <UsersSection /> : null}
       </div>
     </div>
   );
