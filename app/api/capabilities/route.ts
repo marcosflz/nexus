@@ -12,5 +12,7 @@ export async function GET() {
   return NextResponse.json({
     agents: isBackendAvailable(),
     computer: sandboxAvailable(),
+    /** Esta persona puede elegir Claude Code (admin o con permiso concedido). */
+    claudeCode: user.role === "admin" || user.canUseClaudeCode,
   });
 }

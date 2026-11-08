@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from nas.adk.models import ModelRouter
+from nas.adk.models.base_llm import BaseLlm, LlmRequest, LlmResponse
+from nas.adk.models.claude_code.llm import ClaudeCodeLlm
 
 from .contract import ModelSpec
 
@@ -24,7 +28,30 @@ def _anthropic_root(url: str) -> str:
     return url[: -len("/v1")] if url.endswith("/v1") else url
 
 
-def build_model(spec: ModelSpec, *, session_id: str | None = None) -> ModelRouter:
+_claude_code_slots: asyncio.Semaphore | None = None
+
+
+class SharedClaudeCodeLlm(ClaudeCodeLlm):
+    """Claude Code con un límite de concurrencia común a todos los runs.
+
+    Cada run crea su propio modelo, así que el semáforo interno de ``ClaudeCodeLlm``
+    no limitaría nada entre runs; la suscripción es una sola para toda la instancia.
+    """
+
+    async def generate_content_async(self, request: LlmRequest) -> LlmResponse:
+        global _claude_code_slots
+        if _claude_code_slots is None:
+            _claude_code_slots = asyncio.Semaphore(self.max_concurrency)
+        async with _claude_code_slots:
+            return await super().generate_content_async(request)
+
+
+def build_model(spec: ModelSpec, *, session_id: str | None = None) -> BaseLlm:
+    if spec.provider == "claude-code":
+        # Se autentica con la suscripción del contenedor (CLAUDE_CODE_OAUTH_TOKEN), no con
+        # la credencial del usuario. «default» deja elegir el modelo al propio CLI.
+        return SharedClaudeCodeLlm(**({"model": spec.model} if spec.model != "default" else {}))
+
     api_key = spec.apiKey.get_secret_value() if spec.apiKey else ""
 
     if spec.provider == "openrouter":

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { approvals, messages, threads } from "@/lib/db/schema";
 import { getCredentialRow } from "@/lib/credentials";
+import { getProvider } from "@/lib/providers";
 import { getUserAccess } from "@/lib/users";
 import { decryptSecret } from "@/lib/crypto";
 import type { AgUiEvent } from "@/lib/agui/events";
@@ -37,6 +38,10 @@ export async function loadCredential(userId: string, provider?: string | null): 
     return provider
       ? fail(400, `No has configurado el proveedor ${provider}. Añádelo en Ajustes.`, "no_credential")
       : fail(400, "Configura tu proveedor de modelos en Ajustes", "no_credential");
+  }
+  // Se comprueba en cada run: un admin puede haber retirado el permiso.
+  if (getProvider(row.provider)?.requires === "claudeCode" && !access.canUseClaudeCode) {
+    return fail(403, "Ya no tienes permiso para usar Claude Code. Elige otro proveedor en Ajustes.", "no_credential");
   }
   let apiKey: string | null = null;
   if (row.apiKeyEnc) {

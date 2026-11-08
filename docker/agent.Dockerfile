@@ -10,6 +10,16 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /srv
 
+# CLI de Claude Code para el proveedor «suscripción». La versión se fija porque nas-adk
+# valida sus opciones de aislamiento; 2.1.319 es la que tiene probada.
+ARG CLAUDE_CODE_VERSION=2.1.319
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://claude.ai/install.sh | HOME=/tmp/claude-install bash -s "$CLAUDE_CODE_VERSION" \
+    && install -m 0755 "$(readlink -f /tmp/claude-install/.local/bin/claude)" /usr/local/bin/claude \
+    && rm -rf /tmp/claude-install /var/lib/apt/lists/* \
+    && claude --version
+
 COPY --from=nas-adk . /opt/nas-adk
 RUN pip install "/opt/nas-adk[anthropic]"
 
@@ -18,7 +28,9 @@ COPY nexus_agent ./nexus_agent
 # nas-adk ya está instalado: se instalan el resto de dependencias y el paquete sin volver a resolverlo.
 RUN pip install fastapi "uvicorn>=0.34" "httpx>=0.27" "pydantic>=2.12" && pip install --no-deps .
 
-RUN useradd --system --uid 10001 --no-create-home agent
+# El CLI necesita un HOME escribible para su configuración.
+RUN useradd --system --uid 10001 --create-home --home-dir /home/agent agent
+ENV HOME=/home/agent
 USER agent
 
 EXPOSE 8090

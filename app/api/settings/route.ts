@@ -3,7 +3,8 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { deleteCredential, getCredentialRow, listCredentials, saveCredential } from "@/lib/credentials";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
-import { getProvider, PROVIDERS } from "@/lib/providers";
+import { sidecarCapabilities } from "@/lib/agents/backends/nas-adk";
+import { CLAUDE_CODE_PROVIDER, getProvider, PROVIDERS } from "@/lib/providers";
 
 export const runtime = "nodejs";
 
@@ -18,17 +19,31 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-  const rows = await listCredentials(user.id);
+  const mayUseClaudeCode = user.role === "admin" || user.canUseClaudeCode;
+  // Quien no tiene permiso no ve el proveedor, ni aunque le quedara guardado de antes.
+  const rows = (await listCredentials(user.id)).filter(
+    (item) => mayUseClaudeCode || item.provider !== CLAUDE_CODE_PROVIDER,
+  );
   const row = rows[0];
+  const claudeCode = mayUseClaudeCode ? (await sidecarCapabilities()).claudeCode : null;
 
   return NextResponse.json({
-    providers: PROVIDERS.map(({ id, label, needsKey, defaultModel, modelsUrl }) => ({
-      id,
-      label,
-      needsKey,
-      defaultModel,
-      canListModels: Boolean(modelsUrl),
-    })),
+    providers: PROVIDERS.filter((item) => item.requires !== "claudeCode" || mayUseClaudeCode).map(
+      ({ id, label, needsKey, defaultModel, modelsUrl, modelOptions, requires }) => ({
+        id,
+        label,
+        needsKey,
+        defaultModel,
+        canListModels: Boolean(modelsUrl),
+        modelOptions: modelOptions ?? null,
+        serverManaged: requires === "claudeCode",
+        // Motivo por el que no se puede usar ahora mismo; null si está listo.
+        unavailable:
+          requires === "claudeCode" && claudeCode && !claudeCode.available
+            ? (claudeCode.reason ?? "No disponible")
+            : null,
+      }),
+    ),
     credential: row
       ? {
           provider: row.provider,
@@ -62,6 +77,18 @@ export async function PUT(req: NextRequest) {
   if (!info) {
     return NextResponse.json({ error: "Proveedor no soportado" }, { status: 400 });
   }
+  if (info.requires === "claudeCode") {
+    if (user.role !== "admin" && !user.canUseClaudeCode) {
+      return NextResponse.json({ error: "Un administrador debe darte permiso para usar Claude Code" }, { status: 403 });
+    }
+    const { claudeCode } = await sidecarCapabilities();
+    if (!claudeCode.available) {
+      return NextResponse.json({ error: claudeCode.reason ?? "Claude Code no está disponible" }, { status: 409 });
+    }
+    await saveCredential({ userId: user.id, provider, model, apiKeyEnc: undefined, baseUrl: null });
+    return NextResponse.json({ ok: true });
+  }
+
   if (info.needsKey && !apiKey) {
     const existing = await getCredentialRow(user.id, provider);
     if (!existing?.apiKeyEnc) {

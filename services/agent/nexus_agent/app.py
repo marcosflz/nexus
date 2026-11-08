@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from . import __version__
+from .claude_code import ClaudeCodeStatus
 from .contract import CompleteRequest, RunRequest
 from .models import UnsupportedProvider, build_model
 from .run import run_stream
@@ -17,13 +18,32 @@ from .security import AuthError, verify
 from .settings import Settings
 
 
-def create_app(settings: Settings | None = None, **run_kwargs: object) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    claude_code: ClaudeCodeStatus | None = None,
+    **run_kwargs: object,
+) -> FastAPI:
     config = settings or Settings()
     app = FastAPI(title="Nexus agent", version=__version__, docs_url=None, redoc_url=None)
+    claude_code_status = claude_code or ClaudeCodeStatus()
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
+
+    @app.get("/v1/capabilities")
+    async def capabilities(
+        authorization: str | None = Header(default=None),
+        x_nexus_timestamp: str | None = Header(default=None),
+        x_nexus_signature: str | None = Header(default=None),
+    ) -> dict[str, object]:
+        """Qué proveedores dependen de este contenedor y si están listos."""
+        try:
+            verify(config.secret, authorization, x_nexus_timestamp, x_nexus_signature, b"")
+        except AuthError as error:
+            raise HTTPException(status_code=401, detail=str(error)) from error
+        return {"claudeCode": await claude_code_status.get()}
 
     @app.post("/v1/runs")
     async def create_run(

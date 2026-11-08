@@ -206,3 +206,28 @@ describe("instrucciones del turno", () => {
     expect(buildSidecarRequest({ ...input, mode: "research" }, CONFIG, "t").turnInstructions).toMatch(/Research/);
   });
 });
+
+describe("sidecarCapabilities", () => {
+  it("firma la consulta y devuelve lo que dice el sidecar", async () => {
+    process.env.NEXUS_AGENT_SECRET = SECRET;
+    const { sidecarCapabilities } = await import("./nas-adk");
+    let seen: RequestInit | undefined;
+    const fake: typeof fetch = async (_url, init) => {
+      seen = init;
+      return Response.json({ claudeCode: { available: true, reason: null } });
+    };
+    const result = await sidecarCapabilities({ fetch: fake, config: CONFIG });
+    expect(result.claudeCode.available).toBe(true);
+    expect((seen?.headers as Record<string, string>).Authorization).toBe(`Bearer ${SECRET}`);
+  });
+
+  it("si el sidecar no responde, Claude Code queda no disponible con un motivo", async () => {
+    process.env.NEXUS_AGENT_SECRET = SECRET;
+    const { sidecarCapabilities } = await import("./nas-adk");
+    const broken: typeof fetch = async () => {
+      throw new Error("conexión rechazada");
+    };
+    const result = await sidecarCapabilities({ fetch: broken, config: CONFIG });
+    expect(result.claudeCode).toEqual({ available: false, reason: "El motor de agentes no responde." });
+  });
+});

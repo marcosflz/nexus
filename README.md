@@ -125,6 +125,7 @@ Tests: `npm test` · `npm run typecheck` · `npm run build` · `cd services/agen
 | `NEXUS_AGENT_SECRET` | **Obligatoria.** Secreto compartido app ⇄ sidecar. Sin él no se pueden ejecutar turnos. |
 | `NEXUS_AGENT_URL` / `NEXUS_INTERNAL_URL` | URL del sidecar / URL con la que el sidecar vuelve al BFF. |
 | `NEXUS_AGENT_CONTEXT_TOKENS` | Contexto máximo por llamada al modelo en el sidecar (64000). |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Activa el proveedor «Claude Code (suscripción)»; se genera con `claude setup-token`. Los admins deciden quién puede usarlo. |
 | `NEXUS_ADMIN_EMAILS` | Correos que son admin en cada arranque (recuperación de acceso). |
 | `NEXUS_MAX_CONCURRENT_RUNS` | Runs simultáneos (4). Los trabajos sobrantes esperan en cola. |
 | `NEXUS_WORKER` | `off` desactiva el planificador (cron, RSS, cola de trabajos). |
@@ -169,6 +170,7 @@ scripts/migrate.mjs     # DDL idempotente
 ## Limitaciones conocidas
 
 - **Una sola instancia de la app**: el bus de eventos y el ejecutor son de un solo proceso (haría falta LISTEN/NOTIFY).
+- Con Claude Code (suscripción) las respuestas llegan de golpe, sin streaming, y hay una sola suscripción para toda la instancia.
 - Los adjuntos y el conocimiento se extraen como texto: los PDF escaneados (sin capa de texto) no funcionan.
 - La búsqueda en el conocimiento es de **texto completo** (palabras), no semántica.
 - El texto de un agente público incluye su conocimiento: quien lo use puede consultarlo (no descargar los ficheros).

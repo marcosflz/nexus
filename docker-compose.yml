@@ -49,6 +49,11 @@ services:
     environment:
       NEXUS_AGENT_SECRET: ${NEXUS_AGENT_SECRET:?define NEXUS_AGENT_SECRET en .env (openssl rand -hex 32)}
       SEARXNG_URL: http://searxng:8080
+      # Proveedor «Claude Code (suscripción)». No añadas variables ANTHROPIC_* aquí:
+      # nas-adk se niega a arrancar el CLI para no facturar por API sin querer.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      CLAUDE_CODE_MAX_CONCURRENCY: ${CLAUDE_CODE_MAX_CONCURRENCY:-2}
+      CLAUDE_CODE_TIMEOUT: ${CLAUDE_CODE_TIMEOUT:-300}
     # Además de la red interna, el sidecar llega a los navegadores de los agentes (perfil «computer»).
     networks: [default, sandbox]
     # Solo accesible desde la red interna: el BFF es su único cliente.

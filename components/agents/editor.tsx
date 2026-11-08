@@ -78,6 +78,7 @@ export function AgentEditor({
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [versions, setVersions] = useState<{ id: string; version: number; createdAt: string }[]>([]);
   const [computerAvailable, setComputerAvailable] = useState(false);
+  const [claudeCodeAllowed, setClaudeCodeAllowed] = useState(false);
   const [humanControl, setHumanControl] = useState(false);
 
   const patch = useCallback((changes: Partial<AgentSpec>) => setSpec((prev) => ({ ...prev, ...changes })), []);
@@ -89,7 +90,10 @@ export function AgentEditor({
       .catch(() => {});
     fetch("/api/capabilities")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { computer?: boolean } | null) => setComputerAvailable(Boolean(data?.computer)))
+      .then((data: { computer?: boolean; claudeCode?: boolean } | null) => {
+        setComputerAvailable(Boolean(data?.computer));
+        setClaudeCodeAllowed(Boolean(data?.claudeCode));
+      })
       .catch(() => {});
     if (agentId) {
       fetch(`/api/agents/${agentId}/computer`)
@@ -384,7 +388,7 @@ export function AgentEditor({
 
         <TabsContent value="modelo" className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Proveedor" hint="Usa la API key que ya guardaste para ese proveedor.">
+            <Field label="Proveedor" hint="Usa la credencial que ya guardaste para ese proveedor en Ajustes.">
               <Select
                 value={spec.model.provider ?? "__default"}
                 disabled={readOnly}
@@ -393,7 +397,9 @@ export function AgentEditor({
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__default">El predeterminado de mi cuenta</SelectItem>
-                  {PROVIDERS.map((provider) => (
+                  {PROVIDERS.filter(
+                    (item) => !item.requires || claudeCodeAllowed || item.id === spec.model.provider,
+                  ).map((provider) => (
                     <SelectItem key={provider.id} value={provider.id}>{provider.label}</SelectItem>
                   ))}
                 </SelectContent>

@@ -138,6 +138,38 @@ export function buildSidecarRequest(input: BackendRunInput, config: NasAdkConfig
   };
 }
 
+export interface SidecarCapabilities {
+  claudeCode: { available: boolean; reason: string | null };
+}
+
+const CAPABILITIES_TTL_MS = 30_000;
+let capabilitiesCache: { value: SidecarCapabilities; expires: number } | null = null;
+
+/** Lo que depende del contenedor del sidecar. Si no responde, nada está disponible. */
+export async function sidecarCapabilities(deps: NasAdkDeps = {}): Promise<SidecarCapabilities> {
+  const now = deps.now?.() ?? Date.now();
+  if (!deps.fetch && capabilitiesCache && now < capabilitiesCache.expires) return capabilitiesCache.value;
+
+  const config = deps.config === undefined ? nasAdkConfig() : deps.config;
+  const down = (reason: string): SidecarCapabilities => ({ claudeCode: { available: false, reason } });
+  if (!config) return down("El motor de agentes no está configurado.");
+
+  try {
+    const response = await (deps.fetch ?? fetch)(`${config.url}/v1/capabilities`, {
+      headers: signSidecarRequest("", { now }),
+      // Puede arrancar el CLI varias veces si la caché del sidecar ha caducado.
+      signal: AbortSignal.timeout(20_000),
+      cache: "no-store",
+    });
+    if (!response.ok) return down(`El motor de agentes respondió ${response.status}.`);
+    const value = (await response.json()) as SidecarCapabilities;
+    if (!deps.fetch) capabilitiesCache = { value, expires: now + CAPABILITIES_TTL_MS };
+    return value;
+  } catch {
+    return down("El motor de agentes no responde.");
+  }
+}
+
 export function createNasAdkBackend(deps: NasAdkDeps = {}): AgentBackend {
   return {
     id: "nas-adk",

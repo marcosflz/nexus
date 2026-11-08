@@ -12,7 +12,13 @@ export interface ProviderInfo {
   modelsUrl?: string;
   /** Cómo se envía la clave al listar modelos. Por defecto `Authorization: Bearer`. */
   modelsAuth?: "bearer" | "anthropic";
+  /** Modelos fijos que se ofrecen en un desplegable, sin consultar a nadie. */
+  modelOptions?: string[];
+  /** Depende del contenedor del sidecar y de un permiso concedido por un admin. */
+  requires?: "claudeCode";
 }
+
+export const CLAUDE_CODE_PROVIDER = "claude-code";
 
 export const PROVIDERS: ProviderInfo[] = [
   {
@@ -69,6 +75,16 @@ export const PROVIDERS: ProviderInfo[] = [
     defaultModel: "claude-haiku-5-5",
     placeholder: "clave de opencode.ai/console/go",
     modelsUrl: "https://opencode.ai/zen/go/v1/models",
+  },
+  {
+    // Usa la suscripción configurada en el servidor (CLAUDE_CODE_OAUTH_TOKEN), no una clave
+    // del usuario. Los alias los resuelve el CLI; `default` deja que elija él.
+    id: CLAUDE_CODE_PROVIDER,
+    label: "Claude Code (suscripción)",
+    needsKey: false,
+    defaultModel: "default",
+    modelOptions: ["default", "sonnet", "opus", "haiku"],
+    requires: "claudeCode",
   },
 ];
 

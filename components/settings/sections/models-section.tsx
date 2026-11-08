@@ -21,6 +21,12 @@ interface ProviderOption {
   defaultModel: string;
   /** El proveedor expone un endpoint de listado de modelos. */
   canListModels: boolean;
+  /** Modelos fijos para elegir en un desplegable. */
+  modelOptions: string[] | null;
+  /** Usa la suscripción del servidor: no hay clave ni URL que configurar. */
+  serverManaged: boolean;
+  /** Motivo por el que ahora mismo no se puede usar. */
+  unavailable: string | null;
 }
 
 export function ModelsSection() {
@@ -148,7 +154,9 @@ export function ModelsSection() {
     setBusy(false);
   }
 
-  const modelIsListed = models.includes(model);
+  const listed = current?.modelOptions ?? models;
+  const modelIsListed = listed.includes(model);
+  const serverManaged = current?.serverManaged ?? false;
   const control = "h-10 w-full rounded-lg sm:w-72";
 
   return (
@@ -178,50 +186,67 @@ export function ModelsSection() {
                 {providers.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.label}
-                    {saved.some((item) => item.provider === p.id && item.hasKey) ? " ✓" : ""}
+                    {saved.some((item) => item.provider === p.id && (item.hasKey || p.serverManaged)) ? " ✓" : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </SettingsRow>
 
-          <SettingsRow
-            label={`API key${current && !current.needsKey ? " (opcional)" : ""}`}
-            htmlFor="api-key"
-            description="Se cifra en el servidor y solo se usa para tus consultas."
-          >
-            <Input
-              id="api-key"
-              type="password"
-              autoComplete="off"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              onBlur={() => {
-                // Al pegar la clave se listan los modelos solos.
-                if (current?.canListModels && apiKey.trim().length >= 8) {
-                  void loadModels(provider, apiKey);
-                }
-              }}
-              placeholder={hasKey ? "•••••••• (guardada; escribe para reemplazar)" : "Tu API key"}
-              className={control}
-            />
-          </SettingsRow>
+          {serverManaged ? (
+            <SettingsRow
+              label="Credencial"
+              description={
+                current?.unavailable ?? "Usa la suscripción configurada en el servidor; no necesitas clave propia."
+              }
+            >
+              <span className={current?.unavailable ? "text-warning text-[14px]" : "text-success text-[14px]"}>
+                {current?.unavailable ? "No disponible" : "Lista"}
+              </span>
+            </SettingsRow>
+          ) : (
+            <SettingsRow
+              label={`API key${current && !current.needsKey ? " (opcional)" : ""}`}
+              htmlFor="api-key"
+              description="Se cifra en el servidor y solo se usa para tus consultas."
+            >
+              <Input
+                id="api-key"
+                type="password"
+                autoComplete="off"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                onBlur={() => {
+                  // Al pegar la clave se listan los modelos solos.
+                  if (current?.canListModels && apiKey.trim().length >= 8) {
+                    void loadModels(provider, apiKey);
+                  }
+                }}
+                placeholder={hasKey ? "•••••••• (guardada; escribe para reemplazar)" : "Tu API key"}
+                className={control}
+              />
+            </SettingsRow>
+          )}
 
           <SettingsRow
             label="Modelo"
             description={
-              models.length > 0 ? `${models.length} modelos disponibles en ${current?.label}.` : undefined
+              serverManaged
+                ? "«default» usa el modelo predeterminado de tu suscripción."
+                : models.length > 0
+                  ? `${models.length} modelos disponibles en ${current?.label}.`
+                  : undefined
             }
           >
             <div className="flex flex-col items-start gap-1 sm:items-end">
-              {models.length > 0 ? (
+              {listed.length > 0 ? (
                 <Select value={model || undefined} onValueChange={setModel}>
                   <SelectTrigger className={control} aria-label="Modelo">
                     <SelectValue placeholder="Elige un modelo…" />
                   </SelectTrigger>
                   <SelectContent className="max-h-80">
                     {model && !modelIsListed ? <SelectItem value={model}>{model} (actual)</SelectItem> : null}
-                    {models.map((id) => (
+                    {listed.map((id) => (
                       <SelectItem key={id} value={id}>
                         {id}
                       </SelectItem>
@@ -253,25 +278,27 @@ export function ModelsSection() {
             </div>
           </SettingsRow>
 
-          <SettingsRow
-            label="Base URL (opcional)"
-            htmlFor="base-url"
-            description="Para modelos locales, p. ej. http://localhost:1234/v1"
-          >
-            <Input
-              id="base-url"
-              value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
-              placeholder="http://localhost:1234/v1"
-              className={control}
-            />
-          </SettingsRow>
+          {serverManaged ? null : (
+            <SettingsRow
+              label="Base URL (opcional)"
+              htmlFor="base-url"
+              description="Para modelos locales, p. ej. http://localhost:1234/v1"
+            >
+              <Input
+                id="base-url"
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+                placeholder="http://localhost:1234/v1"
+                className={control}
+              />
+            </SettingsRow>
+          )}
         </SettingsGroup>
 
         <div className="flex items-center justify-end gap-3">
           {error ? <p className="text-danger text-sm">{error}</p> : null}
           {status ? <p className="text-success text-sm">{status}</p> : null}
-          <Button type="submit" disabled={busy} className="rounded-full px-5">
+          <Button type="submit" disabled={busy || Boolean(current?.unavailable)} className="rounded-full px-5">
             {busy ? "Guardando..." : "Guardar"}
           </Button>
         </div>
