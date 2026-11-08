@@ -89,6 +89,8 @@ def build_instruction(req: RunRequest, tool_names: set[str], today: date | None 
                 parts.append(UI_SPEC_HEADER.format(profile=ui.profile, spec=ui.spec.strip()))
     if "suggest_followups" in tool_names:
         parts.append(FOLLOWUP_RULES)
+    if req.turnInstructions and req.turnInstructions.strip():
+        parts.append("Para esta pregunta:\n" + req.turnInstructions.strip())
     if agent.instructions.strip():
         parts.append("Instrucciones propias de este agente:\n" + agent.instructions.strip())
     return "\n".join(parts)

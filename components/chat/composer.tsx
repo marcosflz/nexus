@@ -178,7 +178,6 @@ function ModelPicker(props: ChatThreadProps) {
   const label = activeAgent
     ? `${activeAgent.avatar ? `${activeAgent.avatar} ` : ""}${activeAgent.name}`
     : (props.modelLabel ?? "Nexus");
-  const available = props.backends.filter((b) => b.available);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -207,19 +206,6 @@ function ModelPicker(props: ChatThreadProps) {
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
-        {available.length > 1 ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-muted-fg text-[12px]">Motor</DropdownMenuLabel>
-            <DropdownMenuRadioGroup value={props.backend} onValueChange={props.onBackendChange}>
-              {available.map((option) => (
-                <DropdownMenuRadioItem key={option.id} value={option.id}>
-                  {option.label}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </>
-        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => shell.openSettings("models")}>
           <Settings2 className="size-4" /> Cambiar modelo…

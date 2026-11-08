@@ -2,8 +2,9 @@ import { readSse } from "@/lib/agui/client";
 import type { AgUiEvent } from "@/lib/agui/events";
 import { defaultAgentSpec, toSidecarAgent } from "@/lib/agents/spec";
 import { openUiSpec } from "@/lib/openui/profiles";
+import { focusInstruction, researchInstruction } from "@/lib/focus";
 import { signRunToken, signSidecarRequest } from "@/lib/internal/token";
-import type { HermesTokens } from "@/lib/hermes/events";
+import type { TokenUsage } from "@/lib/agents/usage";
 import type { SourceItem } from "@/lib/sources";
 import type {
   AgentBackend,
@@ -37,7 +38,7 @@ interface SidecarResult {
   outcome: "success" | "interrupt" | "error";
   message?: string;
   finalText?: string;
-  usage?: HermesTokens;
+  usage?: TokenUsage;
   sources?: SourceItem[];
   followups?: string[];
   interrupts?: BackendInterrupt[];
@@ -86,6 +87,15 @@ export function friendlyAgentError(message: string): string {
   return message;
 }
 
+/** Instrucciones del foco (académico, Reddit…) y del modo Research para este turno. */
+export function turnInstructions(input: Pick<BackendRunInput, "focus" | "mode">): string | null {
+  const blocks: string[] = [];
+  if (input.mode === "research") blocks.push(researchInstruction());
+  const focus = input.focus ? focusInstruction(input.focus) : null;
+  if (focus) blocks.push(focus);
+  return blocks.length > 0 ? blocks.join("\n\n") : null;
+}
+
 /** Cuerpo de `POST /v1/runs` (ver `services/agent/nexus_agent/contract.py`). */
 export function buildSidecarRequest(input: BackendRunInput, config: NasAdkConfig, runToken: string) {
   const spec = input.agent?.spec ?? defaultAgentSpec();
@@ -109,6 +119,7 @@ export function buildSidecarRequest(input: BackendRunInput, config: NasAdkConfig
     attachments: input.attachments ?? [],
     focus: input.focus ?? null,
     mode: input.mode ?? null,
+    turnInstructions: turnInstructions(input),
     checkpoint: input.checkpoint ?? null,
     resume: input.resume ?? null,
     connectors: input.connectors ?? [],
@@ -130,7 +141,6 @@ export function buildSidecarRequest(input: BackendRunInput, config: NasAdkConfig
 export function createNasAdkBackend(deps: NasAdkDeps = {}): AgentBackend {
   return {
     id: "nas-adk",
-    capabilities: { appTools: true, toolArgStreaming: false, interrupts: true, preToolPolicy: true },
 
     async run(input: BackendRunInput, emit: EmitEvent, signal: AbortSignal): Promise<BackendRunResult> {
       const config = deps.config === undefined ? nasAdkConfig() : deps.config;
@@ -172,7 +182,6 @@ export function createNasAdkBackend(deps: NasAdkDeps = {}): AgentBackend {
       }
 
       const base = {
-        backendSessionId: null,
         usage: result.usage,
         sources: result.sources ?? [],
         followups: result.followups ?? [],
@@ -190,7 +199,6 @@ export function createNasAdkBackend(deps: NasAdkDeps = {}): AgentBackend {
         ...base,
         outcome: "success",
         finalText: result.finalText ?? "",
-        contentSource: "stream",
       };
     },
   };

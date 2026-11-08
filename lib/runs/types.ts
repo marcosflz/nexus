@@ -1,4 +1,4 @@
-import type { HermesTokens } from "@/lib/hermes/events";
+import type { TokenUsage } from "@/lib/agents/usage";
 
 /**
  * Ciclo de vida de un turno.
@@ -37,7 +37,7 @@ export interface Run {
   heartbeatAt: Date | null;
   lastSeq: number;
   error: string | null;
-  usage: HermesTokens | null;
+  usage: TokenUsage | null;
   createdAt: Date;
   updatedAt: Date;
 }

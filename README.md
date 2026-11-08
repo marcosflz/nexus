@@ -47,19 +47,18 @@
 │ BFF Next.js                           │  SQL   │ PostgreSQL   │
 │  auth · runs durables · worker (cola) │◄──────►│ runs, eventos│
 │  política · auditoría · aprobaciones  │        │ agentes, …   │
-└───────┬─────────────────────┬─────────┘        └──────────────┘
-        │ CLI por turno       │ HTTP firmado (secreto + HMAC)
-┌───────▼────────┐   ┌────────▼─────────────┐ MCP  ┌────────────────────┐
-│ Hermes Agent   │   │ Sidecar de agentes   │─────►│ Conectores MCP     │
-│ (buscador)     │   │ (nas-adk · FastAPI)  │─────►│ Navegador del      │
-└───────┬────────┘   └────────┬─────────────┘      │ agente (opcional)  │
-        └──────────┬──────────┘                     └────────────────────┘
-            ┌──────▼──────┐
+└──────────────────┬────────────────────┘        └──────────────┘
+                   │ HTTP firmado (secreto + HMAC)
+        ┌──────────▼───────────┐  MCP  ┌────────────────────┐
+        │ Sidecar de agentes   │──────►│ Conectores MCP     │
+        │ (nas-adk · FastAPI)  │──────►│ Navegador del      │
+        └──────────┬───────────┘       │ agente (opcional)  │
+            ┌──────▼──────┐            └────────────────────┘
             │  SearXNG    │
             └─────────────┘
 ```
 
-- **Dos motores tras una misma interfaz** (`lib/agents/backend.ts`): Hermes (CLI, el buscador clásico) y **nas-adk** (sidecar Python sin estado, en `services/agent/`). Un agente elige el suyo.
+- **Un motor**: el sidecar **nas-adk** (Python, sin estado, en `services/agent/`), detrás del contrato `lib/agents/backend.ts`. Busca con SearXNG, lee páginas, usa conectores MCP, conocimiento y memoria, y entrega interfaces OpenUI como llamadas a herramienta.
 - **Un protocolo**: AG-UI. Cada evento se numera (`seq`), se **guarda y después se publica**; cualquiera puede engancharse con `GET /api/runs/:id/events?after=<seq>` y recibe el backlog más el directo sin huecos ni duplicados.
 - **El sidecar no tiene base de datos ni estado**: recibe el agente, la credencial y el historial en cada petición y llama al BFF (con un token de run firmado, de corta vida) para la política, el conocimiento, la memoria y la validación de OpenUI. Al pausarse devuelve un *checkpoint* que el BFF guarda.
 - **Política fail-closed** (`deny > ask > allow`) evaluada *antes* de cada herramienta, con auditoría previa al efecto. Las rutinas (sin nadie delante) piden aprobación para cualquier acción con efectos.
@@ -83,7 +82,7 @@ docker compose up -d --build
 
 Puertos por defecto: app `3000` (`APP_PORT=3010 docker compose up -d` para cambiarlo, o ponlo en `.env`), Postgres `127.0.0.1:5433`, SearXNG `127.0.0.1:8888`. El sidecar solo es accesible desde la red de Compose.
 
-La imagen de la app hereda la de Hermes (incluye Chromium y Python): el primer build tarda y pesa varios GB.
+La imagen de la app es solo Node (Next.js); el motor de agentes va en su propio contenedor.
 
 ### Ordenador por agente (opcional)
 
@@ -99,18 +98,17 @@ Arranca `sandboxd` y un proxy del socket de Docker que **solo** permite rutas de
 
 ## Desarrollo local
 
-Requisitos: Node 20+, Docker, y el CLI de Hermes en el host (`curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`). Para el sidecar: `uv` y el repositorio de nas-adk.
+Requisitos: Node 20+, Docker, `uv` y el repositorio de nas-adk (para el sidecar, obligatorio).
 
 ```bash
 docker compose up -d db searxng           # Postgres en :5433, SearXNG en :8888
 npm install
 export APP_ENCRYPTION_KEY=$(openssl rand -hex 32)
 export DATABASE_URL=postgres://plexo:plexo@localhost:5433/plexo
-export SEARXNG_URL=http://localhost:8888
 npm run migrate
 npm run dev                               # http://localhost:3000
 
-# Sidecar de agentes (opcional, para el motor nas-adk)
+# Sidecar de agentes (obligatorio: ejecuta todos los turnos)
 cd services/agent && uv sync --extra dev
 NEXUS_AGENT_SECRET=dev SEARXNG_URL=http://localhost:8888 \
   .venv/bin/uvicorn nexus_agent.app:app_factory --factory --port 8090
@@ -124,9 +122,9 @@ Tests: `npm test` · `npm run typecheck` · `npm run build` · `cd services/agen
 | Variable | Para qué |
 |---|---|
 | `APP_ENCRYPTION_KEY` | **Obligatoria.** Cifra API keys y secretos de conectores (AES-256-GCM). |
-| `NEXUS_AGENT_SECRET` | Secreto compartido app ⇄ sidecar. Sin él, el motor nas-adk queda desactivado. |
+| `NEXUS_AGENT_SECRET` | **Obligatoria.** Secreto compartido app ⇄ sidecar. Sin él no se pueden ejecutar turnos. |
 | `NEXUS_AGENT_URL` / `NEXUS_INTERNAL_URL` | URL del sidecar / URL con la que el sidecar vuelve al BFF. |
-| `NEXUS_BACKEND_DEFAULT` | `hermes` (por defecto) o `nas-adk`. |
+| `NEXUS_AGENT_CONTEXT_TOKENS` | Contexto máximo por llamada al modelo en el sidecar (64000). |
 | `NEXUS_MAX_CONCURRENT_RUNS` | Runs simultáneos (4). Los trabajos sobrantes esperan en cola. |
 | `NEXUS_WORKER` | `off` desactiva el planificador (cron, RSS, cola de trabajos). |
 | `NEXUS_ALLOW_PRIVATE_CONNECTORS` | Permite conectores MCP en red privada o `http`. **Desactivado por defecto** (evita SSRF). |
@@ -169,19 +167,18 @@ scripts/migrate.mjs     # DDL idempotente
 ## Limitaciones conocidas
 
 - **Una sola instancia de la app**: el bus de eventos y el ejecutor son de un solo proceso (haría falta LISTEN/NOTIFY).
-- El CLI de Hermes arranca en frío en cada turno; el motor nas-adk no tiene ese coste.
 - Los adjuntos y el conocimiento se extraen como texto: los PDF escaneados (sin capa de texto) no funcionan.
 - La búsqueda en el conocimiento es de **texto completo** (palabras), no semántica.
 - El texto de un agente público incluye su conocimiento: quien lo use puede consultarlo (no descargar los ficheros).
-- Para OpenCode Go, Hermes y nas-adk usan URLs base distintas; si la de nas-adk no acepta tu clave, indica la correcta en el campo «URL base» de Ajustes.
+- Para OpenCode Go, si la URL base por defecto no acepta tu clave, indica la correcta en el campo «URL base» de Ajustes.
 
 ## Migrar desde Plexo
 
 El proyecto se llamaba Plexo. Al actualizar no se pierde nada:
 
-- **Volúmenes**: `docker-compose.yml` fija `plexo_db-data` y `plexo_hermes-data` como nombres de volumen. El usuario y la base de datos de Postgres siguen llamándose `plexo`.
+- **Volúmenes**: `docker-compose.yml` fija `plexo_db-data` como nombre de volumen. El usuario y la base de datos de Postgres siguen llamándose `plexo`. El volumen `plexo_hermes-data` del motor retirado ya no se usa (`docker volume rm plexo_hermes-data` si quieres liberarlo).
 - **Contenedores**: ahora son `nexus-*`. Si tienes los antiguos, `docker compose -p plexo down` (sin `-v`) y luego `docker compose up -d --build`.
-- **Perfiles de Hermes**: al arrancar, `scripts/migrate-hermes-profiles.mjs` renombra `plexo-<hash>` a `nexus-<hash>` (idempotente; si no pudiera, la app usa el nombre antiguo).
+- **Motor Hermes retirado**: los hilos que lo usaban pasan a nas-adk al migrar; la columna `threads.hermes_session_id` queda sin uso.
 - **Sesión**: la cookie pasa a `nexus_session`; `plexo_session` se sigue aceptando hasta que caduque.
 
 ## Documentación

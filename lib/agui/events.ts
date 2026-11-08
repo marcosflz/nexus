@@ -20,9 +20,6 @@ export const NEXUS_POLICY = "nexus.policy";
 /** Preguntas de seguimiento propuestas por el agente. `value: { questions }`. */
 export const NEXUS_FOLLOWUPS = "nexus.followups";
 
-/** Sesión del motor (p. ej. la de Hermes) para poder reanudarla. `value: { sessionId }`. */
-export const NEXUS_SESSION = "nexus.session";
-
 /** Id del mensaje del asistente ya persistido. `value: { messageId }`. */
 export const NEXUS_MESSAGE = "nexus.message";
 
@@ -38,10 +35,6 @@ export const NEXUS_ACTIVITY_PLAN = "PLAN";
 
 export interface NexusFollowupsPayload {
   questions: string[];
-}
-
-export interface NexusSessionPayload {
-  sessionId: string;
 }
 
 export interface NexusMessagePayload {

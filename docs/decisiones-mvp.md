@@ -3,6 +3,11 @@
 Registro de las decisiones tomadas para el esqueleto, con su motivación y alternativas
 descartadas. Sirve como ADR ligero.
 
+> **Noviembre 2026 · Hermes retirado.** El motor de agentes es solo nas-adk (sidecar Python en
+> `services/agent`). Hermes aportaba únicamente búsqueda web y *skills*, y obligaba a mantener un
+> segundo camino (sesiones propias, UI y follow-ups dentro del texto, imagen de varios GB). Las
+> secciones que hablan de Hermes se conservan como historia de las decisiones.
+
 ## 1. Decisiones de producto (confirmadas por el usuario)
 
 | Tema | Decisión |

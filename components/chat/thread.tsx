@@ -247,12 +247,6 @@ function AssistantMessage() {
   );
 }
 
-export interface BackendOption {
-  id: string;
-  label: string;
-  available: boolean;
-}
-
 export interface AgentOption {
   id: string;
   name: string;
@@ -273,12 +267,9 @@ export interface ChatThreadProps {
   focus: string;
   mode: "search" | "research";
   uiEnabled: boolean;
-  backend: string;
-  backends: BackendOption[];
   onFocusChange: (focus: string) => void;
   onModeChange: (mode: "search" | "research") => void;
   onUiChange: (enabled: boolean) => void;
-  onBackendChange: (backend: string) => void;
   attachments: PendingAttachment[];
   uploading: boolean;
   uploadError: string | null;

@@ -12,11 +12,6 @@ export function openuiEnabled(): boolean {
   return readFlag("NEXUS_OPENUI", "PLEXO_OPENUI", true);
 }
 
-/** Toolset `browser` de Hermes + servicio Chromium. Apagado por defecto. */
-export function computerEnabled(): boolean {
-  return readFlag("NEXUS_COMPUTER", "PLEXO_COMPUTER", false);
-}
-
 /** Policy gateway y tarjetas de aprobación. */
 export function approvalsEnabled(): boolean {
   return readFlag("NEXUS_APPROVALS", "PLEXO_APPROVALS", true);

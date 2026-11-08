@@ -5,7 +5,7 @@ import { isConnectorTool } from "./defaults";
 
 /**
  * Nombres con los que el sidecar expone herramientas que el motor de políticas
- * conoce con otro nombre (el catálogo viene de las herramientas de Hermes).
+ * conoce con otro nombre (el catálogo de políticas es anterior al sidecar).
  */
 const POLICY_ALIASES: Record<string, string> = {
   web_fetch: "web_extract",

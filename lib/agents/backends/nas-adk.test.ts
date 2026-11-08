@@ -195,3 +195,14 @@ describe("límites y errores del motor", () => {
     expect(friendlyAgentError("otra cosa")).toBe("otra cosa");
   });
 });
+
+describe("instrucciones del turno", () => {
+  it("manda al sidecar las instrucciones del foco y de Research", async () => {
+    const { turnInstructions } = await import("./nas-adk");
+    expect(turnInstructions({})).toBeNull();
+    expect(turnInstructions({ mode: "research" })).toMatch(/Modo Research/);
+    const both = turnInstructions({ mode: "research", focus: "academic" });
+    expect(both).toMatch(/Modo Research/);
+    expect(buildSidecarRequest({ ...input, mode: "research" }, CONFIG, "t").turnInstructions).toMatch(/Research/);
+  });
+});

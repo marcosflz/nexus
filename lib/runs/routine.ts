@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { agents, messages, threads } from "@/lib/db/schema";
 import { checkAgentBudget } from "@/lib/agents/budget";
-import { getBackend, isBackendAvailable } from "@/lib/agents/registry";
+import { BACKEND_UNAVAILABLE, getBackend, isBackendAvailable } from "@/lib/agents/registry";
 import { loadVersion } from "@/lib/agents/store";
 import { connectorsForRun } from "@/lib/connectors/store";
 import { createNotification } from "@/lib/notifications/store";
@@ -59,8 +59,8 @@ export async function launchRoutineRun(request: RoutineRequest): Promise<Routine
     return { ok: false, error: budget.reason };
   }
 
-  if (!isBackendAvailable(spec.backend)) {
-    const error = "El motor del agente no está disponible en esta instalación";
+  if (!isBackendAvailable()) {
+    const error = BACKEND_UNAVAILABLE;
     await notify("run_failed", `${spec.name} no pudo ejecutarse`, error);
     return { ok: false, error };
   }
@@ -77,13 +77,13 @@ export async function launchRoutineRun(request: RoutineRequest): Promise<Routine
       userId: agent.ownerId,
       title: `${spec.name} · ${request.source}`.slice(0, 120),
       agentId: agent.id,
-      backend: spec.backend,
+      backend: "nas-adk",
       origin: "routine",
     })
     .returning({ id: threads.id });
   await db.insert(messages).values({ threadId: thread.id, role: "user", content: text.slice(0, 20_000), agentId: agent.id });
 
-  const backend = getBackend(spec.backend);
+  const backend = getBackend();
   const run = await createRun(thread.id, agent.ownerId, text, {
     initiator: "trigger",
     backend: backend.id,
@@ -101,7 +101,7 @@ export async function launchRoutineRun(request: RoutineRequest): Promise<Routine
       credential: { ...credential.value, model: spec.model.model || credential.value.model },
       userText: text,
       agent: { id: agent.id, versionId: resolved.versionId, spec },
-      connectors: spec.backend === "nas-adk" ? (await connectorsForRun(agent.ownerId, agent.id, spec)).links : undefined,
+      connectors: (await connectorsForRun(agent.ownerId, agent.id, spec)).links,
       limits: { maxTurns: spec.budgets.maxToolCalls || 25 },
     },
     { ...defaultExecutorDeps(), onFinished: makeOnFinished({ chainDepth: request.chainDepth }) },

@@ -322,12 +322,12 @@ export function AgentEditor({
                   Ordenador (navegador propio)
                   <span className="text-muted-foreground block text-xs">
                     Un navegador aislado y persistente solo para este agente (con sus cookies y ficheros). Leer es libre;
-                    pulsar, escribir o enviar formularios pide tu aprobación. Solo con el motor nas-adk.
+                    pulsar, escribir o enviar formularios pide tu aprobación.
                   </span>
                 </span>
                 <Switch
                   checked={spec.computer.enabled}
-                  disabled={readOnly || spec.backend !== "nas-adk"}
+                  disabled={readOnly}
                   onCheckedChange={(on) => patch({ computer: { enabled: on } })}
                 />
               </label>
@@ -383,15 +383,6 @@ export function AgentEditor({
         ) : null}
 
         <TabsContent value="modelo" className="space-y-4">
-          <Field label="Motor" hint="nas-adk permite interfaces interactivas, conocimiento, memoria y conectores; Hermes es el motor de búsqueda clásico.">
-            <Select value={spec.backend} disabled={readOnly} onValueChange={(v) => patch({ backend: v as AgentSpec["backend"] })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="nas-adk">nas-adk</SelectItem>
-                <SelectItem value="hermes">Hermes</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Proveedor" hint="Usa la API key que ya guardaste para ese proveedor.">
               <Select

@@ -19,7 +19,7 @@ import { useShell } from "@/components/shell/shell-context";
 import { PREFS_EVENT, readPrefs, type Prefs } from "@/lib/prefs";
 import { ChatActionsProvider, type ChatActions, type MessageCustom } from "./chat-context";
 import { ChatHeader } from "./chat-header";
-import { ChatThread, type BackendOption } from "./thread";
+import { ChatThread } from "./thread";
 import type {
   PendingAttachment,
   UiAttachment,
@@ -130,8 +130,6 @@ export function ChatApp({
   const [focus, setFocus] = useState("web");
   const [mode, setMode] = useState<"search" | "research">("search");
   const [uiMode, setUiMode] = useState(false);
-  const [backend, setBackend] = useState("hermes");
-  const [backends, setBackends] = useState<BackendOption[]>([]);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -154,18 +152,7 @@ export function ChatApp({
   /** Hilo recién creado por nosotros: sus mensajes ya están en pantalla, no se recargan. */
   const skipLoadRef = useRef<string | null>(null);
 
-  // --- capacidades, notificaciones ---------------------------------------
-
-  useEffect(() => {
-    fetch("/api/capabilities")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { backends: BackendOption[]; defaultBackend: string } | null) => {
-        if (!data) return;
-        setBackends(data.backends);
-        setBackend(data.defaultBackend);
-      })
-      .catch(() => {});
-  }, []);
+  // --- agentes, notificaciones ---------------------------------------------
 
   useEffect(() => {
     fetch("/api/agents")
@@ -347,7 +334,6 @@ export function ChatApp({
         }) => {
           if (cancelled) return;
           setLoadingThread(false);
-          if (data.thread.backend) setBackend(data.thread.backend);
           setAgentId(data.thread.agentId);
           const loaded = data.messages.map(fromServerMessage);
           const active = data.activeRun;
@@ -474,7 +460,6 @@ export function ChatApp({
             focus: sentFocus,
             mode: sentMode,
             ui: uiMode || undefined,
-            backend,
             agentId: agentId ?? undefined,
             attachments: attachments.length > 0 ? attachments : undefined,
             replace: replaceServerId ? { messageId: replaceServerId } : undefined,
@@ -511,7 +496,7 @@ export function ChatApp({
         fail(error);
       }
     },
-    [focus, mode, uiMode, backend, agentId, shell, beginFollow, endFollow, consumeRun],
+    [focus, mode, uiMode, agentId, shell, beginFollow, endFollow, consumeRun],
   );
 
   const onNew = useCallback(
@@ -761,12 +746,9 @@ export function ChatApp({
               focus={focus}
               mode={mode}
               uiEnabled={uiMode}
-              backend={backend}
-              backends={backends}
               onFocusChange={setFocus}
               onModeChange={setMode}
               onUiChange={setUiMode}
-              onBackendChange={setBackend}
               attachments={pendingAttachments}
               uploading={uploading}
               uploadError={uploadError}

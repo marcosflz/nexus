@@ -26,7 +26,8 @@ export const agentSpecSchema = z.object({
   avatar: z.string().max(8).default(""),
   /** Sugerencias de arranque que se muestran en un hilo nuevo. */
   starters: z.array(z.string().trim().min(1).max(200)).max(6).default([]),
-  backend: z.enum(["hermes", "nas-adk"]).default("nas-adk"),
+  /** Único motor. Las versiones antiguas guardadas con "hermes" se leen como nas-adk. */
+  backend: z.literal("nas-adk").default("nas-adk").catch("nas-adk"),
   /** Si falta, se usa el proveedor y modelo de la credencial del usuario. */
   model: z
     .object({

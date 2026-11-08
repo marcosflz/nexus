@@ -1,14 +1,9 @@
 import { EventType } from "@ag-ui/core";
-import {
-  NEXUS_MESSAGE,
-  NEXUS_SESSION,
-  type AgUiEvent,
-  type NexusSessionPayload,
-} from "@/lib/agui/events";
+import { NEXUS_MESSAGE, type AgUiEvent } from "@/lib/agui/events";
 import { reduceAgUiAll } from "@/lib/agui/reducer";
 import type { AgentBackend, BackendRunInput, BackendRunResult } from "@/lib/agents/backend";
 import type { PersistedPart, PersistedTool } from "@/lib/db/schema";
-import type { HermesTokens } from "@/lib/hermes/events";
+import type { TokenUsage } from "@/lib/agents/usage";
 import type { SourceItem } from "@/lib/sources";
 import type { RunBus } from "./bus";
 import { finalizeAssistantMessage } from "./finalize";
@@ -19,8 +14,6 @@ import type { FinishOptions, NewRunEvent } from "./store";
 export interface ExecutorDeps {
   appendEvents(runId: string, events: NewRunEvent[]): Promise<void>;
   heartbeat(runId: string, lastSeq: number): Promise<void>;
-  setAgentSession(runId: string, sessionId: string): Promise<void>;
-  setThreadSession(threadId: string, sessionId: string): Promise<void>;
   finishRun(
     runId: string,
     transition: {
@@ -37,7 +30,7 @@ export interface ExecutorDeps {
     tools: PersistedTool[];
     parts: PersistedPart[] | null;
     followups: string[] | null;
-    usage: HermesTokens | null;
+    usage: TokenUsage | null;
   }): Promise<string>;
   bus: RunBus;
   /** Se llama al terminar el run (con éxito, error, cancelación o pausa). Nunca debe lanzar. */
@@ -73,7 +66,7 @@ export interface ExecuteRunInput {
 export const DEFAULT_FLUSH_MS = 75;
 export const CANCELLED_CODE = "cancelled";
 
-function toAgUiUsage(usage: HermesTokens | undefined): unknown[] | undefined {
+function toAgUiUsage(usage: TokenUsage | undefined): unknown[] | undefined {
   if (!usage) return undefined;
   return [
     {
@@ -164,17 +157,6 @@ export async function executeRun(
 
     flushText();
     push(event);
-
-    if (event.type === EventType.CUSTOM && (event as { name?: string }).name === NEXUS_SESSION) {
-      const { sessionId } = (event as { value: NexusSessionPayload }).value;
-      // Se guarda en cuanto llega: si el turno falla, el siguiente conserva el contexto.
-      if (sessionId && sessionId !== input.backendSessionId) {
-        void deps.setAgentSession(runId, sessionId).catch(() => {});
-        void deps.setThreadSession(threadId, sessionId).catch((error) =>
-          console.warn("[nexus] no se pudo guardar la sesión del motor:", error),
-        );
-      }
-    }
   };
 
   const notifyFinished = async (
@@ -264,12 +246,8 @@ export async function executeRun(
     // Éxito: se persiste el mensaje antes de anunciar el fin, de modo que quien
     // recargue al ver RUN_FINISHED ya encuentra el mensaje en la base de datos.
     const state = reduceAgUiAll(history, `msg-${runId}`);
-    const finalized = finalizeAssistantMessage(
-      state,
-      result.finalText,
-      result.contentSource ?? "final",
-    );
-    // Los follow-ups llegan como evento (nas-adk) o dentro del resultado; el evento manda.
+    const finalized = finalizeAssistantMessage(state, result.finalText);
+    // Los follow-ups llegan como evento o dentro del resultado; el evento manda.
     const followups = state.message.followups?.length
       ? state.message.followups
       : (result.followups ?? []);

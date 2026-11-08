@@ -249,3 +249,11 @@ def test_inline_spec_drops_the_openui_spec_tool_and_the_context_budget_is_config
 
     assert make_request().limits.maxContextTokens == 64000
     assert make_request(limits={"maxContextTokens": 100000}).limits.maxContextTokens == 100000
+
+
+def test_turn_instructions_from_the_bff_reach_the_system_prompt():
+    from nexus_agent.build import build_instruction
+
+    text = build_instruction(make_request(turnInstructions="Modo Research: informe."), set())
+    assert "Para esta pregunta:\nModo Research: informe." in text
+    assert "Para esta pregunta" not in build_instruction(make_request(), set())

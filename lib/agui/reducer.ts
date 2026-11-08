@@ -7,8 +7,6 @@ import {
   type NexusFollowupsPayload,
   type NexusSourcesPayload,
 } from "./events";
-import { OPENUI_TOOL_NAME, splitOpenUiBlocks } from "@/lib/openui/blocks";
-import { stripFollowupsBlock } from "@/lib/sources";
 import type {
   UiInterrupt,
   UiMessage,
@@ -29,11 +27,10 @@ export interface AgUiState {
   message: UiMessage;
   runId: string | null;
   threadId: string | null;
-  agentSessionId: string | null;
   interrupts: UiInterrupt[];
-  /** Texto crudo del asistente, con los bloques de UI dentro. */
+  /** Texto crudo del asistente tal y como llega en streaming. */
   rawText: string;
-  /** Llamadas a herramientas emitidas por AG-UI (Hermes). */
+  /** Llamadas a herramientas emitidas por AG-UI. */
   toolCalls: UiToolCall[];
   /** Posición de `rawText` en la que arrancó cada herramienta (para ordenar `parts`). */
   toolOffsets: Record<string, number>;
@@ -56,7 +53,6 @@ export function initialAgUiState(
     },
     runId: null,
     threadId: null,
-    agentSessionId: null,
     interrupts: [],
     rawText: "",
     toolCalls: [],
@@ -101,37 +97,16 @@ function parseArgsBestEffort(argsText: string): unknown {
 
 /**
  * Recalcula `content`, `tools` y `parts` a partir del texto crudo y de las
- * herramientas.
- *
- * Los bloques OpenUI se derivan del texto, así que su estado es siempre
- * coherente con lo que se ha recibido: no hay una segunda fuente de verdad que
- * pueda desincronizarse. El texto se parte en cada herramienta (según el punto
- * del texto en que arrancó) para conservar el orden real texto → pasos → texto.
+ * herramientas. El texto se parte en cada herramienta (según el punto del texto
+ * en que arrancó) para conservar el orden real texto → pasos → texto. La UI
+ * generativa llega como llamadas a herramienta (`present_openui`), no en el texto.
  */
 function rebuild(state: AgUiState, patch: Partial<UiMessage> = {}): AgUiState {
   const parts: UiPart[] = [];
-  const openui: UiToolCall[] = [];
-  let openuiIndex = 0;
 
   const pushChunk = (chunk: string) => {
-    for (const segment of splitOpenUiBlocks(chunk)) {
-      if (segment.type === "text") {
-        // El bloque `## Follow-ups` de Hermes es un canal, no contenido para mostrar.
-        const text = stripFollowupsBlock(segment.text.replace(/\n{3,}/g, "\n\n"));
-        if (text) parts.push({ type: "text", text });
-        continue;
-      }
-      const id = `openui-${openuiIndex++}`;
-      openui.push({
-        id,
-        name: OPENUI_TOOL_NAME,
-        kind: "openui",
-        input: { ui: segment.program },
-        argsText: JSON.stringify({ ui: segment.program }),
-        status: segment.closed ? "complete" : "running",
-      });
-      parts.push({ type: "tool", toolId: id });
-    }
+    const text = chunk.replace(/\n{3,}/g, "\n\n");
+    if (text) parts.push({ type: "text", text });
   };
 
   let cursor = 0;
@@ -156,7 +131,7 @@ function rebuild(state: AgUiState, patch: Partial<UiMessage> = {}): AgUiState {
     message: {
       ...state.message,
       content,
-      tools: [...state.toolCalls, ...openui],
+      tools: state.toolCalls,
       parts,
       ...patch,
     },

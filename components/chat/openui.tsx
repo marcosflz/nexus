@@ -22,9 +22,8 @@ function useOpenUiTheme() {
 /**
  * Renderer de la UI generativa.
  *
- * El programa llega como argumento `ui` de una tool part `present_openui`. Con
- * nas-adk es una llamada real a la herramienta; con Hermes se extrae de un bloque
- * cercado del texto. OpenUI se encarga del parseo, el estado de los controles y
+ * El programa llega como argumento `ui` de una llamada a `present_openui` del
+ * agente. OpenUI se encarga del parseo, el estado de los controles y
  * el replay; aquí solo se fija la librería y el tema.
  */
 export const OpenUIPresentTool: ToolCallMessagePartComponent = (props) => {

@@ -114,6 +114,8 @@ class RunRequest(_Strict):
     attachments: list[Attachment] = Field(default_factory=list)
     focus: str | None = None
     mode: Literal["search", "research"] | None = None
+    # Instrucciones del foco y del modo Research, ya redactadas por el BFF.
+    turnInstructions: str | None = Field(default=None, max_length=8000)
     # Para reanudar un run en pausa: sesión serializada + respuestas de la persona.
     checkpoint: list[dict[str, Any]] | None = None
     resume: list[ResumeItem] | None = None

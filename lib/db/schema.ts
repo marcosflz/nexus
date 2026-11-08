@@ -10,7 +10,7 @@ import {
   jsonb,
 } from "drizzle-orm/pg-core";
 import type { SourceItem } from "@/lib/sources";
-import type { HermesTokens } from "@/lib/hermes/events";
+import type { TokenUsage } from "@/lib/agents/usage";
 import type { ActionKind, PolicyEffect } from "@/lib/policy/types";
 
 export interface MessageAttachmentMeta {
@@ -91,8 +91,9 @@ export const threads = pgTable("threads", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull().default("Nuevo chat"),
+  /** @deprecated Sesión del motor retirado (Hermes). Sin uso; se borrará en una migración posterior. */
   hermesSessionId: text("hermes_session_id"),
-  /** Motor que atiende el hilo (`hermes` | `nas-adk`). Null = el predeterminado. */
+  /** Motor que atendió el hilo. Hoy siempre `nas-adk`. */
   backend: text("backend"),
   /** Agente que lleva el hilo; null = el integrado de Nexus. */
   agentId: uuid("agent_id"),
@@ -116,7 +117,7 @@ export const messages = pgTable("messages", {
   sources: jsonb("sources").$type<SourceItem[]>(),
   tools: jsonb("tools").$type<PersistedTool[]>(),
   attachments: jsonb("attachments").$type<MessageAttachmentMeta[]>(),
-  usage: jsonb("usage").$type<HermesTokens>(),
+  usage: jsonb("usage").$type<TokenUsage>(),
   /** Partes ordenadas (texto / herramienta). Null en mensajes anteriores a la v2. */
   parts: jsonb("parts").$type<PersistedPart[]>(),
   /** Preguntas de seguimiento propuestas por el agente. */
@@ -145,7 +146,7 @@ export const runs = pgTable("runs", {
   status: text("status").notNull().default("running"),
   /** Quién lanzó el run: una persona, una rutina programada o un disparador. */
   initiator: text("initiator").notNull().default("user"),
-  /** Motor que lo ejecuta (`hermes`, `nas-adk`). */
+  /** Motor que lo ejecutó. Hoy siempre `nas-adk`. */
   backend: text("backend"),
   agentId: uuid("agent_id"),
   agentVersionId: uuid("agent_version_id"),
@@ -163,7 +164,7 @@ export const runs = pgTable("runs", {
   lastSeq: integer("last_seq").notNull().default(0),
   prompt: text("prompt"),
   error: text("error"),
-  usage: jsonb("usage").$type<HermesTokens>(),
+  usage: jsonb("usage").$type<TokenUsage>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -374,6 +374,10 @@ try {
   await sql`ALTER TABLE threads ADD COLUMN IF NOT EXISTS project_id uuid REFERENCES projects(id) ON DELETE SET NULL`;
   await sql`CREATE INDEX IF NOT EXISTS threads_project_idx ON threads (project_id) WHERE project_id IS NOT NULL`;
 
+  // Hermes se retiró: nas-adk es el único motor. `hermes_session_id` se conserva
+  // (sin uso) para poder volver atrás; se borrará en una migración posterior.
+  await sql`UPDATE threads SET backend = 'nas-adk' WHERE backend = 'hermes'`;
+
   // Un run que quedó `running` cuando el proceso murió nunca terminó: se
   // reconcilia al arrancar en vez de dejar la UI en un spinner eterno.
   await sql`

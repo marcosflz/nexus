@@ -4,7 +4,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { messages, threads, type MessageAttachmentMeta } from "@/lib/db/schema";
 import { getCurrentUser } from "@/lib/auth";
-import { defaultBackendId, getBackend, isBackendAvailable, isBackendId } from "@/lib/agents/registry";
+import { BACKEND_UNAVAILABLE, getBackend, isBackendAvailable } from "@/lib/agents/registry";
 import { checkAgentBudget } from "@/lib/agents/budget";
 import { selectAgent } from "@/lib/agents/select";
 import { connectorsForRun } from "@/lib/connectors/store";
@@ -25,14 +25,6 @@ const attachmentSchema = z.object({
   text: z.string().max(120_000),
 });
 
-/** Resultado de un formulario OpenUI que el usuario acaba de enviar. */
-const formResultSchema = z.object({
-  formName: z.string().max(200).optional(),
-  message: z.string().max(2000),
-  params: z.record(z.string(), z.unknown()),
-  formState: z.record(z.string(), z.unknown()).optional(),
-});
-
 const turnSchema = z.object({
   threadId: z.string().uuid(),
   text: z.string().min(1).max(8000),
@@ -41,9 +33,6 @@ const turnSchema = z.object({
   attachments: z.array(attachmentSchema).max(5).optional(),
   /** El usuario ha pedido expresamente una respuesta con interfaz. */
   ui: z.boolean().optional(),
-  formResult: formResultSchema.optional(),
-  /** Motor para este hilo (se recuerda en el hilo). */
-  backend: z.string().max(20).optional(),
   /** Agente que atiende este turno (se recuerda en el hilo). También vale `@slug` al inicio. */
   agentId: z.string().uuid().optional(),
   /** Editar o regenerar: el mensaje de usuario que se reemplaza (y todo lo posterior). */
@@ -83,8 +72,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return Response.json({ error: "Petición no válida" }, { status: 400 });
   }
-  const { threadId, text, focus, mode, attachments = [], ui, formResult, backend: requested, replace, agentId } =
-    parsed.data;
+  const { threadId, text, focus, mode, attachments = [], ui, replace, agentId } = parsed.data;
 
   const [thread] = await db
     .select()
@@ -105,16 +93,8 @@ export async function POST(req: NextRequest) {
   const turnText = selection.text;
   const spec = agent?.spec ?? defaultAgentSpec();
 
-  // Un agente trae su propio motor; sin agente manda la elección del usuario.
-  const backendId = agent ? spec.backend : (requested ?? thread.backend ?? defaultBackendId());
-  if (!isBackendId(backendId)) {
-    return Response.json({ error: "Motor de agente desconocido" }, { status: 400 });
-  }
-  if (!isBackendAvailable(backendId)) {
-    return Response.json(
-      { error: "El motor nas-adk no está configurado en esta instalación", code: "backend_unavailable" },
-      { status: 400 },
-    );
+  if (!isBackendAvailable()) {
+    return Response.json({ error: BACKEND_UNAVAILABLE, code: "backend_unavailable" }, { status: 503 });
   }
 
   if (agent) {
@@ -131,7 +111,6 @@ export async function POST(req: NextRequest) {
 
   // Editar o regenerar: el mensaje y todo lo posterior se marca como reemplazado
   // (sigue guardado, pero deja de formar parte de la conversación).
-  let backendSessionId = thread.hermesSessionId;
   if (replace) {
     const [target] = await db
       .select({ createdAt: messages.createdAt })
@@ -157,9 +136,6 @@ export async function POST(req: NextRequest) {
           gte(messages.createdAt, target.createdAt),
         ),
       );
-    // La sesión de Hermes aún contiene los turnos retirados: se empieza otra.
-    backendSessionId = null;
-    await db.update(threads).set({ hermesSessionId: null }).where(eq(threads.id, threadId));
   }
 
   const attachmentMeta: MessageAttachmentMeta[] = attachments.map(
@@ -178,13 +154,13 @@ export async function POST(req: NextRequest) {
     .update(threads)
     .set({
       ...(thread.title === "Nuevo chat" ? { title: text.slice(0, 60) } : {}),
-      ...(thread.backend !== backendId ? { backend: backendId } : {}),
+      ...(thread.backend !== "nas-adk" ? { backend: "nas-adk" } : {}),
       ...(selection.explicit && agent && thread.agentId !== agent.agent.id ? { agentId: agent.agent.id } : {}),
       updatedAt: new Date(),
     })
     .where(eq(threads.id, threadId));
 
-  const backend = getBackend(backendId);
+  const backend = getBackend();
   const run = await createRun(threadId, user.id, turnText, {
     initiator: "user",
     backend: backend.id,
@@ -208,16 +184,11 @@ export async function POST(req: NextRequest) {
     openui: openuiToolsEnabled({ focus, mode, userToggle: wantsUi }),
     openuiProfile: profileFor({ focus, mode, userToggle: wantsUi }),
     openuiRequested: wantsUi,
-    formResult: formResult ?? null,
-    backendSessionId,
     limits: mode === "research" ? { maxTurns: RESEARCH_MAX_TURNS } : undefined,
     agent: { id: agent?.agent.id ?? null, versionId: agent?.versionId ?? null, spec },
-    connectors: backendId === "nas-adk" ? (await connectorsForRun(user.id, agent?.agent.id ?? null, spec)).links : undefined,
-    // nas-adk no tiene sesión propia; Hermes la tiene salvo que acabe de reiniciarse.
-    history:
-      backendId === "nas-adk" || !backendSessionId
-        ? await buildHistory(threadId, userMessage.id)
-        : undefined,
+    connectors: (await connectorsForRun(user.id, agent?.agent.id ?? null, spec)).links,
+    // El motor no guarda sesión: cada turno recibe el historial del hilo.
+    history: await buildHistory(threadId, userMessage.id),
   });
 
   // El cliente necesita el id del mensaje guardado para poder editarlo o regenerarlo.

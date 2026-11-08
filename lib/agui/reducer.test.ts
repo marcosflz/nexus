@@ -54,34 +54,20 @@ describe("reduceAgUi", () => {
     expect(tool?.input).toEqual({ query: "clima madrid" });
   });
 
-  it("extrae un bloque openui del texto y lo deja fuera de la prosa", () => {
-    const intro = "Mira este resumen.\n\n";
-    const program = 'root = Card([t])\nt = TextContent("Hola")';
+  it("la UI generativa llega como herramienta y un bloque cercado en el texto es solo texto", () => {
     const events = [
-      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: intro },
-      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "```openui\n" },
-      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: `${program}\n` },
+      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "Antes.\n```openui\nroot = Card([])\n```\n" },
+      { type: EventType.TOOL_CALL_START, toolCallId: "c1", toolCallName: "present_openui" },
+      { type: EventType.TOOL_CALL_ARGS, toolCallId: "c1", delta: '{"ui":"root = Card([])"}' },
+      { type: EventType.TOOL_CALL_END, toolCallId: "c1" },
     ] as unknown as AgUiEvent[];
 
-    // A mitad del bloque: existe, pero sigue en curso. El salto de párrafo que
-    // precedía al bloque se conserva: quitarlo rompería el texto al llegar en
-    // fragmentos.
-    const partial = reduceAgUiAll(events, "m1");
-    expect(partial.message.content).toBe("Mira este resumen.\n\n");
-    const running = partial.message.tools.find((item) => item.kind === "openui");
-    expect(running?.status).toBe("running");
-    expect(running?.name).toBe("present_openui");
+    const { message } = reduceAgUiAll(events, "m1");
 
-    // Cerrado: programa completo y listo para persistir.
-    const closed = reduceAgUi(partial, {
-      type: EventType.TEXT_MESSAGE_CONTENT,
-      messageId: "m1",
-      delta: "```\n",
-    } as AgUiEvent);
-
-    const done = closed.message.tools.find((item) => item.kind === "openui");
-    expect(done?.status).toBe("complete");
-    expect(done?.input).toEqual({ ui: program });
+    expect(message.tools).toHaveLength(1);
+    expect(message.tools[0]).toMatchObject({ id: "c1", name: "present_openui", input: { ui: "root = Card([])" } });
+    expect(message.content).toContain("```openui");
+    expect(message.parts?.map((part) => part.type)).toEqual(["text", "tool"]);
   });
 
   it("conserva el orden real de texto y herramientas en parts", () => {
@@ -105,20 +91,6 @@ describe("reduceAgUi", () => {
       { type: "text", text: "Listo." },
     ]);
     expect(message.content).toBe("Busco. Leo. Listo.");
-  });
-
-  it("coloca un bloque openui en su sitio dentro de parts", () => {
-    const events = [
-      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "Antes.\n" },
-      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "```openui\nroot = Card([])\n```\n" },
-      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "Después." },
-    ] as unknown as AgUiEvent[];
-
-    const { message } = reduceAgUiAll(events, "m1");
-
-    expect(message.parts?.map((part) => part.type)).toEqual(["text", "tool", "text"]);
-    expect(message.parts?.[1]).toEqual({ type: "tool", toolId: "openui-0" });
-    expect(message.tools.some((tool) => tool.id === "openui-0" && tool.kind === "openui")).toBe(true);
   });
 
   it("sigue entendiendo los eventos plexo.sources ya guardados en run_events", () => {

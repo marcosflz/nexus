@@ -12,8 +12,6 @@ export function createMemoryRunStore() {
   const calls = {
     finish: [] as { runId: string; transition: unknown; options: unknown }[],
     savedMessages: [] as Record<string, unknown>[],
-    threadSessions: [] as string[],
-    agentSessions: [] as string[],
     heartbeats: [] as number[],
   };
   let status: RunStatus = "running";
@@ -33,12 +31,6 @@ export function createMemoryRunStore() {
     },
     async heartbeat(_runId, lastSeq) {
       calls.heartbeats.push(lastSeq);
-    },
-    async setAgentSession(_runId, sessionId) {
-      calls.agentSessions.push(sessionId);
-    },
-    async setThreadSession(_threadId, sessionId) {
-      calls.threadSessions.push(sessionId);
     },
     async finishRun(runId, transition, options) {
       calls.finish.push({ runId, transition, options });

@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { runEvents, runs } from "@/lib/db/schema";
-import type { HermesTokens } from "@/lib/hermes/events";
+import type { TokenUsage } from "@/lib/agents/usage";
 import {
   RUN_LEASE_MS,
   nextRunState,
@@ -26,7 +26,7 @@ function toRun(row: typeof runs.$inferSelect): Run {
     heartbeatAt: row.heartbeatAt,
     lastSeq: row.lastSeq,
     error: row.error,
-    usage: (row.usage as HermesTokens | null) ?? null,
+    usage: (row.usage as TokenUsage | null) ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -117,15 +117,8 @@ export async function heartbeat(runId: string, lastSeq?: number): Promise<void> 
     .where(eq(runs.id, runId));
 }
 
-export async function setAgentSession(runId: string, sessionId: string): Promise<void> {
-  await db
-    .update(runs)
-    .set({ agentSessionId: sessionId, updatedAt: new Date() })
-    .where(eq(runs.id, runId));
-}
-
 export interface FinishOptions {
-  usage?: HermesTokens | null;
+  usage?: TokenUsage | null;
   error?: string | null;
   lastSeq?: number;
   outcome?: unknown;

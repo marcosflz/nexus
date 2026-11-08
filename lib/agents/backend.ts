@@ -1,27 +1,21 @@
 import type { AgUiEvent } from "@/lib/agui/events";
 import type { AgentSpec } from "@/lib/agents/spec";
-import type { HermesTokens } from "@/lib/hermes/events";
-import type { PromptAttachment, PromptFormResult } from "@/lib/hermes/prompts";
+import type { TokenUsage } from "@/lib/agents/usage";
 import type { OpenUiProfile } from "@/lib/openui/profiles";
 import type { RunInitiator } from "@/lib/runs/types";
 import type { SourceItem } from "@/lib/sources";
 
 /**
- * Contrato entre el BFF y los motores de agente.
+ * Contrato entre el BFF y el motor de agentes (el sidecar nas-adk).
  *
- * Un backend recibe lo que necesita para un turno y emite eventos AG-UI; no
- * toca la base de datos ni conoce HTTP. Hermes (CLI) es el primero; nas-adk
- * entrará como sidecar con este mismo contrato.
+ * El backend recibe lo que necesita para un turno y emite eventos AG-UI; no
+ * toca la base de datos ni conoce HTTP. Las pruebas lo sustituyen por uno falso.
  */
-export interface BackendCapabilities {
-  /** Puede llamar a herramientas propias de la app (p. ej. `present_openui`). */
-  appTools: boolean;
-  /** Emite los argumentos de las herramientas a medida que se generan. */
-  toolArgStreaming: boolean;
-  /** Puede pausarse (`interrupt`) y reanudarse con `resume`. */
-  interrupts: boolean;
-  /** La política se aplica *antes* de cada herramienta (no solo se audita después). */
-  preToolPolicy: boolean;
+
+/** Documento adjunto, ya extraído a texto. */
+export interface PromptAttachment {
+  name: string;
+  text: string;
 }
 
 export interface BackendCredential {
@@ -76,10 +70,6 @@ export interface BackendRunInput {
   openuiProfile?: OpenUiProfile;
   /** El usuario ha pedido expresamente una respuesta con interfaz (interruptor «UI»). */
   openuiRequested?: boolean;
-  /** Resultado de un formulario OpenUI que el usuario acaba de enviar. */
-  formResult?: PromptFormResult | null;
-  /** Sesión previa del motor, para continuar la conversación. */
-  backendSessionId?: string | null;
   limits?: RunLimits;
   /** Agente que atiende el turno. Sin él, el integrado de Nexus. */
   agent?: { id: string | null; versionId: string | null; spec: AgentSpec };
@@ -101,16 +91,13 @@ export interface BackendInterrupt {
 }
 
 export interface BackendRunResult {
-  backendSessionId: string | null;
   /** `interrupt` deja el run en pausa (`awaiting_input`) hasta un `resume`. */
   outcome: "success" | "interrupt";
   interrupts?: BackendInterrupt[];
-  usage?: HermesTokens;
+  usage?: TokenUsage;
   /** Texto final del asistente, tal y como lo devuelve el motor. */
   finalText: string;
   sources: SourceItem[];
-  /** De dónde sale el texto guardado: el final del motor o lo que se vio en streaming. */
-  contentSource?: "final" | "stream";
   /** Preguntas de seguimiento propuestas por el agente. */
   followups?: string[];
   /** Sesión del motor para reanudar un run pausado (solo con `outcome: "interrupt"`). */
@@ -120,11 +107,10 @@ export interface BackendRunResult {
 export type EmitEvent = (event: AgUiEvent) => void;
 
 export interface AgentBackend {
-  id: "hermes" | "nas-adk";
-  capabilities: BackendCapabilities;
+  id: "nas-adk";
   /**
-   * Ejecuta un turno. Emite `RUN_STARTED`-less eventos de contenido (texto,
-   * herramientas, `CUSTOM`); el ejecutor añade el ciclo de vida del run.
+   * Ejecuta un turno. Emite eventos de contenido (texto, herramientas, `CUSTOM`);
+   * el ejecutor añade el ciclo de vida del run y guarda lo que se vio en streaming.
    * Debe lanzar si `signal` se aborta o el motor falla.
    */
   run(input: BackendRunInput, emit: EmitEvent, signal: AbortSignal): Promise<BackendRunResult>;

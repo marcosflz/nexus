@@ -1,5 +1,9 @@
 # Próximos pasos (retomar aquí)
 
+> **Actualización (noviembre 2026):** Hermes se retiró. Todos los turnos los ejecuta el sidecar nas-adk, y
+> la app es una imagen de Node sin el CLI. Todo lo que en este documento habla de Hermes (perfiles, sesiones,
+> `HERMES_BIN`, imagen pesada) es histórico.
+>
 > **Actualización (iteraciones 4–8):** agentes, Intelligent UI interactiva, autonomía y compartir ya están hechos;
 > ver `docs/decisiones-mvp.md` §9 y el README. Este documento conserva el backlog original del MVP; lo que sigue
 > abierto está en la sección «Pendiente tras las iteraciones 4–8» al final.

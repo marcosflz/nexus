@@ -1,7 +1,7 @@
 import { EventType } from "@ag-ui/core";
 import { describe, expect, it } from "vitest";
 import type { AgentBackend, BackendRunInput, BackendRunResult } from "@/lib/agents/backend";
-import { NEXUS_SESSION, type AgUiEvent } from "@/lib/agui/events";
+import type { AgUiEvent } from "@/lib/agui/events";
 import { executeRun } from "./executor";
 import { createMemoryRunStore } from "./testing";
 
@@ -18,12 +18,10 @@ function fakeBackend(
   script: (emit: (event: AgUiEvent) => void, signal: AbortSignal) => Promise<Partial<BackendRunResult>>,
 ): AgentBackend {
   return {
-    id: "hermes",
-    capabilities: { appTools: false, toolArgStreaming: false, interrupts: false, preToolPolicy: false },
+    id: "nas-adk",
     async run(_input, emit, signal) {
       const partial = await script(emit, signal);
       return {
-        backendSessionId: null,
         outcome: "success",
         finalText: "",
         sources: [],
@@ -134,37 +132,6 @@ describe("executeRun", () => {
     expect(store.calls.finish[0]).toMatchObject({ transition: { kind: "awaiting-input" } });
   });
 
-  it("guarda la sesión del motor en cuanto llega, sin esperar al final", async () => {
-    const store = createMemoryRunStore();
-    let sessionSavedBeforeEnd = false;
-    const backend = fakeBackend(async (emit) => {
-      emit({ type: EventType.CUSTOM, name: NEXUS_SESSION, value: { sessionId: "sess-9" } } as AgUiEvent);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      sessionSavedBeforeEnd = store.calls.threadSessions.includes("sess-9");
-      throw new Error("el turno falla después");
-    });
-
-    await executeRun(store.executorDeps, { backend, input: INPUT }, new AbortController().signal);
-
-    expect(sessionSavedBeforeEnd).toBe(true);
-    expect(store.calls.agentSessions).toEqual(["sess-9"]);
-  });
-
-  it("no reescribe la sesión si es la misma que ya tenía el hilo", async () => {
-    const store = createMemoryRunStore();
-    const backend = fakeBackend(async (emit) => {
-      emit({ type: EventType.CUSTOM, name: NEXUS_SESSION, value: { sessionId: "sess-1" } } as AgUiEvent);
-      return { finalText: "ok" };
-    });
-
-    await executeRun(
-      store.executorDeps,
-      { backend, input: { ...INPUT, backendSessionId: "sess-1" } },
-      new AbortController().signal,
-    );
-
-    expect(store.calls.threadSessions).toEqual([]);
-  });
 });
 
 describe("executeRun: pausa y reanudación", () => {
@@ -219,7 +186,7 @@ describe("executeRun: pausa y reanudación", () => {
         role: "tool",
       } as unknown as AgUiEvent);
       emit(text("Listo."));
-      return { finalText: "Listo.", contentSource: "stream", followups: ["¿Y el hotel?"] };
+      return { finalText: "Listo.", followups: ["¿Y el hotel?"] };
     });
     await executeRun(
       store.executorDeps,
@@ -251,11 +218,11 @@ describe("executeRun: pausa y reanudación", () => {
     expect(store.calls.finish.at(-1)).toMatchObject({ transition: { kind: "finished" } });
   });
 
-  it("con contentSource=stream el texto guardado es el que vio la persona, no el finalText", async () => {
+  it("el texto guardado es el que vio la persona, no el finalText", async () => {
     const store = createMemoryRunStore();
     const backend = fakeBackend(async (emit) => {
       emit(text("Vista por la persona"));
-      return { finalText: "Solo el último mensaje", contentSource: "stream" };
+      return { finalText: "Solo el último mensaje" };
     });
 
     await executeRun(store.executorDeps, { backend, input: INPUT }, new AbortController().signal);

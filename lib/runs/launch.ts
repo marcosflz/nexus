@@ -30,8 +30,8 @@ export async function loadCredential(userId: string, provider?: string | null): 
   const row = await getCredentialRow(userId, provider);
   if (!row) {
     return provider
-      ? fail(400, `No has configurado una API key para ${provider}. Añádela en Ajustes.`, "no_credential")
-      : fail(400, "Configura tu proveedor y API key en Ajustes", "no_credential");
+      ? fail(400, `No has configurado el proveedor ${provider}. Añádelo en Ajustes.`, "no_credential")
+      : fail(400, "Configura tu proveedor de modelos en Ajustes", "no_credential");
   }
   let apiKey: string | null = null;
   if (row.apiKeyEnc) {
@@ -133,7 +133,7 @@ export async function launchResume(params: {
   }));
 
   void startRun(
-    getBackend(run.backend ?? "nas-adk"),
+    getBackend(),
     {
       runId,
       threadId: run.threadId,

@@ -1,7 +1,6 @@
 export interface ProviderInfo {
   id: string;
   label: string;
-  envVar?: string;
   needsKey: boolean;
   defaultModel: string;
   placeholder?: string;
@@ -17,7 +16,6 @@ export const PROVIDERS: ProviderInfo[] = [
   {
     id: "openrouter",
     label: "OpenRouter",
-    envVar: "OPENROUTER_API_KEY",
     needsKey: true,
     defaultModel: "anthropic/claude-sonnet-4.6",
     placeholder: "sk-or-v1-...",
@@ -26,7 +24,6 @@ export const PROVIDERS: ProviderInfo[] = [
   {
     id: "openai-api",
     label: "OpenAI",
-    envVar: "OPENAI_API_KEY",
     needsKey: true,
     defaultModel: "gpt-5.5",
     placeholder: "sk-...",
@@ -35,7 +32,6 @@ export const PROVIDERS: ProviderInfo[] = [
   {
     id: "anthropic",
     label: "Anthropic",
-    envVar: "ANTHROPIC_API_KEY",
     needsKey: true,
     defaultModel: "claude-sonnet-4.6",
     placeholder: "sk-ant-...",
@@ -43,7 +39,6 @@ export const PROVIDERS: ProviderInfo[] = [
   {
     id: "gemini",
     label: "Google Gemini",
-    envVar: "GEMINI_API_KEY",
     needsKey: true,
     defaultModel: "gemini-3-flash",
     placeholder: "AIza...",
@@ -51,7 +46,6 @@ export const PROVIDERS: ProviderInfo[] = [
   {
     id: "deepseek",
     label: "DeepSeek",
-    envVar: "DEEPSEEK_API_KEY",
     needsKey: true,
     defaultModel: "deepseek-chat",
     placeholder: "sk-...",
@@ -64,12 +58,9 @@ export const PROVIDERS: ProviderInfo[] = [
     placeholder: "opcional",
   },
   {
-    // Hermes trae este proveedor de serie (plugin `opencode-zen`), con endpoint
-    // propio. Ojo: la variable NO es OPENCODE_API_KEY (la genérica de models.dev)
-    // sino OPENCODE_GO_API_KEY; si se usa la otra, la petición sale sin clave.
+    // Suscripción OpenCode Go: el sidecar usa el proveedor `opencode` de nas-adk.
     id: "opencode-go",
     label: "OpenCode Go",
-    envVar: "OPENCODE_GO_API_KEY",
     needsKey: true,
     defaultModel: "claude-haiku-5-5",
     placeholder: "clave de opencode.ai/console/go",

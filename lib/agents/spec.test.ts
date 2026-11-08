@@ -25,13 +25,17 @@ describe("AgentSpec", () => {
     });
   });
 
+  it("lee como nas-adk las versiones guardadas con el motor retirado", () => {
+    const old = agentSpecSchema.safeParse({ name: "a", backend: "hermes" });
+    expect(old.success && old.data.backend).toBe("nas-adk");
+  });
+
   it("rechaza especificaciones no válidas", () => {
     const bad = (value: unknown) => agentSpecSchema.safeParse(value).success;
 
     expect(bad({})).toBe(false);
     expect(bad({ name: "   " })).toBe(false);
     expect(bad({ name: "x".repeat(81) })).toBe(false);
-    expect(bad({ name: "a", backend: "otro" })).toBe(false);
     expect(bad({ name: "a", starters: Array(7).fill("x") })).toBe(false);
     expect(bad({ name: "a", knowledge: { topK: 99 } })).toBe(false);
     expect(bad({ name: "a", connectors: [{ connectorId: "no-uuid" }] })).toBe(false);

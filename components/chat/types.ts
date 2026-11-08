@@ -15,8 +15,8 @@ export interface ProjectSummary {
 /**
  * Una llamada a herramienta tal y como la ve la UI.
  *
- * `argsText` existe porque los argumentos pueden llegar (y llegarán, cuando
- * Hermes los emita en fragmentos) sin ser JSON válido todavía; los renderers
+ * `argsText` existe porque los argumentos pueden llegar en fragmentos sin ser
+ * JSON válido todavía; los renderers
  * que pintan UI generativa necesitan el texto crudo además del objeto.
  */
 export interface UiToolCall {

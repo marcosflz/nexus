@@ -10,35 +10,28 @@ services:
     restart: unless-stopped
     # Margen para que Next termine los turnos en curso antes de que Docker lo mate.
     stop_grace_period: 30s
-    command: ["bash", "/app/docker/start-web.sh"]
+    command: ["sh", "/app/docker/start-web.sh"]
     ports:
       # Puerto del host configurable: APP_PORT=3010 docker compose up -d
       - "${APP_PORT:-3000}:3000"
     environment:
       NODE_ENV: production
       DATABASE_URL: postgres://plexo:plexo@db:5432/plexo
-      SEARXNG_URL: http://searxng:8080
       APP_URL: ${APP_URL:-http://localhost:3000}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
-      HERMES_HOME: /opt/data
-      # Motor nas-adk: URL del sidecar, secreto compartido y URL con la que el
-      # sidecar vuelve a llamar al BFF (red interna de Compose).
+      # Motor de agentes (sidecar nas-adk): URL, secreto compartido y URL con la que
+      # el sidecar vuelve a llamar al BFF (red interna de Compose).
       NEXUS_AGENT_URL: http://agent:8090
       NEXUS_AGENT_SECRET: ${NEXUS_AGENT_SECRET}
       NEXUS_AGENT_CONTEXT_TOKENS: ${NEXUS_AGENT_CONTEXT_TOKENS:-64000}
       NEXUS_INTERNAL_URL: http://app:3000
-      NEXUS_BACKEND_DEFAULT: ${NEXUS_BACKEND_DEFAULT:-hermes}
       # Solo si se despliega el perfil «computer»: gestor de los navegadores de los agentes.
       NEXUS_SANDBOXD_URL: ${NEXUS_SANDBOXD_URL:-}
-    volumes:
-      - hermes-data:/opt/data
     depends_on:
       db:
         condition: service_healthy
-      searxng:
-        condition: service_started
       agent:
-        condition: service_started
+        condition: service_healthy
 
   # Sidecar de agentes (nas-adk). nas-adk vive en su propio repositorio: se aporta
   # como contexto adicional (por defecto el directorio hermano ../nas-adk).
@@ -139,8 +132,7 @@ networks:
 volumes:
   # Los nombres se fijan a los que se crearon cuando el proyecto se llamaba
   # "plexo": sin esto, `name: nexus` crearía volúmenes vacíos (nexus_*) y los
-  # usuarios, hilos y perfiles de Hermes existentes parecerían perdidos.
-  hermes-data:
-    name: plexo_hermes-data
+  # usuarios e hilos existentes parecerían perdidos. El volumen `plexo_hermes-data`
+  # del motor retirado ya no se usa; puede borrarse a mano.
   db-data:
     name: plexo_db-data
