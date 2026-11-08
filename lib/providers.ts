@@ -10,6 +10,8 @@ export interface ProviderInfo {
    * consume no debe poder apuntar a un host arbitrario.
    */
   modelsUrl?: string;
+  /** Cómo se envía la clave al listar modelos. Por defecto `Authorization: Bearer`. */
+  modelsAuth?: "bearer" | "anthropic";
 }
 
 export const PROVIDERS: ProviderInfo[] = [
@@ -31,10 +33,12 @@ export const PROVIDERS: ProviderInfo[] = [
   },
   {
     id: "anthropic",
-    label: "Anthropic",
+    label: "Anthropic (API)",
     needsKey: true,
-    defaultModel: "claude-sonnet-4.6",
+    defaultModel: "claude-sonnet-5-5",
     placeholder: "sk-ant-...",
+    modelsUrl: "https://api.anthropic.com/v1/models?limit=100",
+    modelsAuth: "anthropic",
   },
   {
     id: "gemini",

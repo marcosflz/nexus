@@ -22,6 +22,7 @@ from .agui import AgUiMapper
 from .bff import BffClient
 from .build import build_agent, build_tools, build_user_message
 from .contract import RunRequest
+from .errors import ErrorCapture, describe_model_error
 from .models import UnsupportedProvider, build_model
 from .policy import PolicyCallback
 from .settings import Settings
@@ -147,12 +148,13 @@ async def run_stream(
 
                 service = InMemorySessionService()
                 session_id = _seed_session(service, req)
+                errors = ErrorCapture()
                 limits = req.limits
                 runner = Runner(
                     app_name=APP_NAME,
                     agent=agent,
                     session_service=service,
-                    callbacks=[PolicyCallback(bff)],
+                    callbacks=[PolicyCallback(bff), errors],
                     max_model_calls=limits.maxModelCalls,
                     max_turns=limits.maxTurns,
                     timeout=limits.timeoutS,
@@ -200,7 +202,9 @@ async def run_stream(
                 else:
                     result = {
                         "outcome": "error",
-                        "message": terminal.content or f"el run terminó con {terminal.status}",
+                        "message": describe_model_error(errors.error)
+                        or terminal.content
+                        or f"el run terminó con {terminal.status}",
                     }
                 result.update(
                     usage=_usage(usage),
@@ -213,7 +217,10 @@ async def run_stream(
                 log.exception("run %s falló", req.runId)
                 for out in mapper.finish():
                     queue.put_nowait(out)
-                result = {"outcome": "error", "message": f"{type(error).__name__}: {error}"}
+                result = {
+                    "outcome": "error",
+                    "message": describe_model_error(error) or f"{type(error).__name__}: {error}",
+                }
             queue.put_nowait({"type": "CUSTOM", "name": NEXUS_RESULT, "value": result})
             queue.put_nowait(None)
 

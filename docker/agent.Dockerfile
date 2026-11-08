@@ -11,7 +11,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /srv
 
 COPY --from=nas-adk . /opt/nas-adk
-RUN pip install /opt/nas-adk
+RUN pip install "/opt/nas-adk[anthropic]"
 
 COPY pyproject.toml ./
 COPY nexus_agent ./nexus_agent

@@ -99,8 +99,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const auth: Record<string, string> =
+      provider.modelsAuth === "anthropic"
+        ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+        : { Authorization: `Bearer ${apiKey}` };
     const response = await fetch(provider.modelsUrl, {
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      headers: { ...auth, Accept: "application/json" },
       signal: AbortSignal.timeout(12_000),
       redirect: "error",
       cache: "no-store",

@@ -24,7 +24,6 @@ def test_opencode_base_url_can_be_overridden_from_settings():
     ("provider", "base"),
     [
         ("openai-api", "https://api.openai.com/v1"),
-        ("anthropic", "https://api.anthropic.com/v1"),
         ("gemini", "https://generativelanguage.googleapis.com/v1beta/openai"),
         ("deepseek", "https://api.deepseek.com/v1"),
     ],
@@ -47,3 +46,15 @@ def test_a_custom_base_url_beats_the_default_for_hosted_providers():
 def test_unknown_providers_are_rejected_by_name():
     with pytest.raises(UnsupportedProvider, match="inventado"):
         build_model(spec("inventado"))
+
+
+def test_anthropic_uses_the_native_messages_api():
+    backend = build_model(spec("anthropic"))._get_backend()
+    assert backend.provider == "anthropic"
+    assert backend.model == "m"
+
+
+def test_anthropic_base_url_is_the_sdk_root_with_or_without_v1():
+    for url in ("https://proxy.example.com/v1", "https://proxy.example.com/v1/", "https://proxy.example.com"):
+        backend = build_model(spec("anthropic", baseUrl=url))._get_backend()
+        assert backend.base_url == "https://proxy.example.com"
