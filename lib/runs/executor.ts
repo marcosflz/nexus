@@ -31,6 +31,7 @@ export interface ExecutorDeps {
     parts: PersistedPart[] | null;
     followups: string[] | null;
     usage: TokenUsage | null;
+    reasoning?: string | null;
   }): Promise<string>;
   bus: RunBus;
   /** Se llama al terminar el run (con éxito, error, cancelación o pausa). Nunca debe lanzar. */
@@ -41,6 +42,7 @@ export interface ExecutorDeps {
 }
 
 export interface FinishedInfo {
+  botId?: string | null;
   runId: string;
   threadId: string;
   userId: string;
@@ -171,6 +173,7 @@ export async function executeRun(
         userId: input.userId,
         initiator: input.initiator,
         agentId: input.agent?.id ?? null,
+        botId: input.botId ?? null,
         agentName: input.agent?.spec.name ?? "Nexus",
         outcome,
         text,
@@ -260,6 +263,7 @@ export async function executeRun(
       parts: finalized.parts,
       followups: followups.length > 0 ? followups : null,
       usage: result.usage ?? null,
+      reasoning: finalized.reasoning,
     });
 
     push({ type: EventType.CUSTOM, name: NEXUS_MESSAGE, value: { messageId } } as AgUiEvent);

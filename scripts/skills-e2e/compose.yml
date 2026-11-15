@@ -1,0 +1,84 @@
+name: nexus-skills-e2e
+
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: skills
+      POSTGRES_PASSWORD: skills-test-only
+      POSTGRES_DB: skills
+    tmpfs: [/var/lib/postgresql]
+    ports: ["127.0.0.1:29434:5432"]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U skills -d skills"]
+      interval: 2s
+      retries: 30
+  model:
+    image: python:3.12-slim
+    command: [python, /model.py]
+    volumes: ["./model.py:/model.py:ro"]
+  agent:
+    container_name: nexus-skills-e2e-agent
+    build:
+      context: ../../services/agent
+      dockerfile: ../../docker/agent.Dockerfile
+      additional_contexts:
+        nas-adk: ../../../nas-adk
+    environment:
+      NEXUS_AGENT_SECRET: skills-e2e-only
+      SEARXNG_URL: http://127.0.0.1:9
+      PYTHONPATH: /opt/nas-source
+    volumes:
+      - ../../../nas-adk/nas:/opt/nas-source/nas:ro
+      - ../../services/agent/nexus_agent:/srv/nexus_agent:ro
+    depends_on: [model]
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    environment: { CONTAINERS: 1, VOLUMES: 1, NETWORKS: 1, POST: 1, DELETE: 1 }
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    networks: [control]
+  egress:
+    container_name: nexus-skills-e2e-egress
+    build:
+      context: ../../services/sandboxd
+      dockerfile: ../../docker/sandboxd.Dockerfile
+    command: [python, -m, sandboxd.egress]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  sandboxd:
+    container_name: nexus-skills-e2e-sandboxd
+    build:
+      context: ../../services/sandboxd
+      dockerfile: ../../docker/sandboxd.Dockerfile
+    environment:
+      NEXUS_AGENT_SECRET: skills-e2e-only
+      DOCKER_HOST: http://docker-proxy:2375
+      BOT_IMAGE: nexus-nexbot:skills-check
+      BOT_EGRESS_CONTAINER: nexus-skills-e2e-egress
+      BOT_CONTROL_CONTAINERS: nexus-skills-e2e-sandboxd,nexus-skills-e2e-agent
+      BOT_SUBNET_BASE: 10.236.0.0/16
+      BOT_LABEL: nexus.skills.e2e.bot
+    depends_on: [docker-proxy, egress]
+    networks: [default, control]
+  app:
+    build:
+      context: ../..
+      dockerfile: docker/web.Dockerfile
+    ports: ["127.0.0.1:3303:3000"]
+    environment:
+      DATABASE_URL: postgres://skills:skills-test-only@db:5432/skills
+      APP_URL: http://127.0.0.1:3303
+      APP_ENCRYPTION_KEY: "2222222222222222222222222222222222222222222222222222222222222222"
+      NEXUS_AGENT_SECRET: skills-e2e-only
+      NEXUS_AGENT_URL: http://agent:8090
+      NEXUS_INTERNAL_URL: http://app:3000
+      NEXUS_SANDBOXD_URL: http://sandboxd:8095
+      NEXUS_WORKER: off
+    depends_on:
+      db: { condition: service_healthy }
+      agent: { condition: service_started }
+      sandboxd: { condition: service_started }
+
+networks:
+  control: { internal: true }

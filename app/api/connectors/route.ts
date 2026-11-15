@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, permissionDenied } from "@/lib/auth";
 import { createConnector, listConnectors } from "@/lib/connectors/store";
 
 export const runtime = "nodejs";
@@ -24,6 +24,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+  const denied = permissionDenied(user, "connectors");
+  if (denied) return denied;
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {

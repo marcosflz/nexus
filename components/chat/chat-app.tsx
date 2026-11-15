@@ -19,7 +19,8 @@ import { useShell } from "@/components/shell/shell-context";
 import { PREFS_EVENT, readPrefs, type Prefs } from "@/lib/prefs";
 import { ChatActionsProvider, type ChatActions, type MessageCustom } from "./chat-context";
 import { ChatHeader } from "./chat-header";
-import { ChatThread } from "./thread";
+import { ChatThread, type ModelChoiceOption, type ModelGroupOption } from "./thread";
+import { MODELS_CHANGED_EVENT, readStoredModel, storeModel } from "@/lib/models/selection";
 import type {
   PendingAttachment,
   UiAttachment,
@@ -40,6 +41,7 @@ interface ServerMessage {
   attachments: UiAttachment[] | null;
   usage: UiUsage | null;
   parts: UiPart[] | null;
+  reasoning?: string | null;
   followups: string[] | null;
   runId: string | null;
   rating: number | null;
@@ -66,6 +68,7 @@ function fromServerMessage(row: ServerMessage): UiMessage {
     attachments: row.attachments ?? [],
     usage: row.usage ?? null,
     parts: row.parts ?? undefined,
+    reasoning: row.reasoning ?? undefined,
     followups: row.followups ?? undefined,
     runId: row.runId ?? undefined,
     rating: row.rating === 1 || row.rating === -1 ? row.rating : null,
@@ -126,7 +129,11 @@ export function ChatApp({
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [loadingThread, setLoadingThread] = useState(false);
-  const [modelLabel, setModelLabel] = useState<string | null>(null);
+  const [modelGroups, setModelGroups] = useState<ModelGroupOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState<ModelChoiceOption | null>(null);
+  const [availableSkills, setAvailableSkills] = useState<{ name: string; description: string }[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [agentModel, setAgentModel] = useState<{ provider?: string; model?: string } | null>(null);
   const [focus, setFocus] = useState("web");
   const [mode, setMode] = useState<"search" | "research">("search");
   const [uiMode, setUiMode] = useState(false);
@@ -155,23 +162,39 @@ export function ChatApp({
   // --- agentes, notificaciones ---------------------------------------------
 
   useEffect(() => {
-    fetch("/api/agents")
-      .then((res) => (res.ok ? res.json() : { agents: [] }))
-      .then((data: { agents: (AgentSummary & { status: string })[] }) =>
-        setAgents(data.agents.filter((agent) => agent.status === "active")),
+    fetch("/api/bots")
+      .then((res) => (res.ok ? res.json() : { bots: [] }))
+      .then((data: { bots: AgentSummary[] }) =>
+        setAgents(data.bots),
       )
       .catch(() => {});
   }, []);
 
-  // Las preguntas de arranque del agente elegido.
+  useEffect(() => {
+    let alive = true;
+    setSelectedSkills([]);
+    void Promise.all([
+      fetch("/api/skills").then((response) => response.ok ? response.json() : { skills: [] }),
+      agentId ? fetch(`/api/bots/${agentId}`).then((response) => response.ok ? response.json() : null) : Promise.resolve(null),
+    ]).then(([library, profile]) => {
+      if (alive) setAvailableSkills(library.skills.filter((skill: { id: string; enabledInChat: boolean }) => agentId ? profile?.bot?.skillIds?.includes(skill.id) : skill.enabledInChat));
+    }).catch(() => { if (alive) setAvailableSkills([]); });
+    return () => { alive = false; };
+  }, [agentId]);
+
+  // Las preguntas de arranque del agente elegido, y su modelo si lo fija.
   useEffect(() => {
     setAgentStarters(undefined);
+    setAgentModel(null);
     if (!agentId) return;
     let alive = true;
-    fetch(`/api/agents/${agentId}`)
+    fetch(`/api/bots/${agentId}`)
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { spec?: { starters?: string[] } } | null) => {
-        if (alive && data?.spec?.starters?.length) setAgentStarters(data.spec.starters);
+      .then((data: { spec?: { starters?: string[]; model?: { provider?: string; model?: string } } } | null) => {
+        if (!alive) return;
+        if (data?.spec?.starters?.length) setAgentStarters(data.spec.starters);
+        const fixed = data?.spec?.model;
+        if (fixed && (fixed.provider || fixed.model)) setAgentModel(fixed);
       })
       .catch(() => {});
     return () => {
@@ -205,15 +228,36 @@ export function ChatApp({
     return () => window.removeEventListener(PREFS_EVENT, onPrefs);
   }, []);
 
-  // Nombre del modelo configurado, para el selector del compositor.
+  // Modelos activos de todos los proveedores, para el selector del compositor. Se recargan
+  // cuando cambian en Ajustes o al volver a la pestaña.
   useEffect(() => {
-    fetch("/api/settings")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { credential?: { model?: string } | null } | null) => {
-        const model = data?.credential?.model;
-        if (model) setModelLabel(model.split("/").pop() ?? model);
-      })
-      .catch(() => {});
+    const load = () =>
+      fetch("/api/models")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { groups: ModelGroupOption[]; default: ModelChoiceOption | null } | null) => {
+          if (!data) return;
+          setModelGroups(data.groups);
+          const exists = (choice: ModelChoiceOption | null) =>
+            Boolean(choice && data.groups.some((g) => g.provider === choice.provider && g.models.some((m) => m.id === choice.model)));
+          setSelectedModel((current) => {
+            if (exists(current)) return current;
+            const stored = readStoredModel();
+            return exists(stored) ? stored : data.default;
+          });
+        })
+        .catch(() => {});
+    void load();
+    window.addEventListener(MODELS_CHANGED_EVENT, load);
+    window.addEventListener("focus", load);
+    return () => {
+      window.removeEventListener(MODELS_CHANGED_EVENT, load);
+      window.removeEventListener("focus", load);
+    };
+  }, []);
+
+  const changeModel = useCallback((choice: ModelChoiceOption) => {
+    setSelectedModel(choice);
+    storeModel(choice);
   }, []);
 
   // «Nuevo chat»: se limpian adjuntos y se vuelve al agente integrado (salvo al montar).
@@ -328,13 +372,13 @@ export function ChatApp({
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error("no encontrado"))))
       .then(
         (data: {
-          thread: { backend: string | null; agentId: string | null };
+          thread: { backend: string | null; botId: string | null };
           messages: ServerMessage[];
           activeRun?: ServerActiveRun | null;
         }) => {
           if (cancelled) return;
           setLoadingThread(false);
-          setAgentId(data.thread.agentId);
+          setAgentId(data.thread.botId);
           const loaded = data.messages.map(fromServerMessage);
           const active = data.activeRun;
           if (!active) {
@@ -390,7 +434,8 @@ export function ChatApp({
   const runTurn = useCallback(
     async ({ text, attachments, replaceServerId }: TurnRequest) => {
       const sentFocus = focus === "web" ? undefined : focus;
-      const sentMode = mode === "search" ? undefined : mode;
+      // Una preferencia guardada no debe hacer fallar el turno si ya no hay permiso.
+      const sentMode = mode === "search" || !shell.user.permissions.research ? undefined : mode;
 
       // Al editar o regenerar, la conversación se corta en el mensaje sustituido.
       if (replaceServerId) {
@@ -459,8 +504,11 @@ export function ChatApp({
             text,
             focus: sentFocus,
             mode: sentMode,
-            ui: uiMode || undefined,
-            agentId: agentId ?? undefined,
+            ui: (uiMode && shell.user.permissions.generativeUi) || undefined,
+            botId: agentId,
+            explicitSkills: selectedSkills,
+            // Si el agente fija su modelo, manda el suyo (el servidor lo vuelve a comprobar).
+            model: agentModel ? undefined : (selectedModel ?? undefined),
             attachments: attachments.length > 0 ? attachments : undefined,
             replace: replaceServerId ? { messageId: replaceServerId } : undefined,
           }),
@@ -496,7 +544,7 @@ export function ChatApp({
         fail(error);
       }
     },
-    [focus, mode, uiMode, agentId, shell, beginFollow, endFollow, consumeRun],
+    [focus, mode, uiMode, agentId, agentModel, selectedModel, selectedSkills, shell, beginFollow, endFollow, consumeRun],
   );
 
   const onNew = useCallback(
@@ -636,6 +684,9 @@ export function ChatApp({
       };
     };
 
+    // El razonamiento que publica el modelo va plegado, antes de la respuesta.
+    if (message.role === "assistant" && message.reasoning) content.push({ type: "reasoning", text: message.reasoning });
+
     if (message.parts && message.parts.length > 0) {
       // Orden real del turno: texto → pasos → texto → interfaz.
       const byId = new Map(message.tools.map((tool) => [tool.id, tool]));
@@ -722,6 +773,13 @@ export function ChatApp({
     [runTurn, resumeRun, rate, isRunning],
   );
 
+  const { setThreadRunning } = shell;
+  useEffect(() => {
+    if (!isRunning || !currentThreadId) return;
+    setThreadRunning(currentThreadId, true);
+    return () => setThreadRunning(currentThreadId, false);
+  }, [isRunning, currentThreadId, setThreadRunning]);
+
   const currentThread = shell.threads.find((t) => t.id === currentThreadId) ?? null;
   const activeAgent = agents.find((agent) => agent.id === agentId);
   const activeProject = shell.projects.find((p) => p.id === shell.activeProjectId) ?? null;
@@ -738,8 +796,14 @@ export function ChatApp({
               agentName={activeAgent?.name}
               projectName={currentThreadId ? null : (activeProject?.name ?? null)}
               onClearProject={() => shell.newChat(null)}
-              modelLabel={modelLabel}
+              modelGroups={modelGroups}
+              selectedModel={selectedModel}
+              onModelChange={changeModel}
+              agentModel={agentModel}
               starters={agentStarters ?? []}
+              skills={availableSkills}
+              selectedSkills={selectedSkills}
+              onSkillsChange={setSelectedSkills}
               agents={agents}
               agentId={agentId}
               onAgentChange={setAgentId}

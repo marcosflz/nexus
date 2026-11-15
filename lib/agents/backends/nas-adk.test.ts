@@ -169,6 +169,14 @@ describe("nasAdkConfig", () => {
   });
 });
 
+describe("buildSidecarRequest · búsqueda", () => {
+  it("manda los motores de la instancia, o null para usar el SearXNG del sidecar", () => {
+    const search = { minResults: 2, providers: [{ id: "brave", apiKey: "k", baseUrl: null }] };
+    expect(buildSidecarRequest(input, CONFIG, "tok", search).search).toEqual(search);
+    expect(buildSidecarRequest(input, CONFIG, "tok").search).toBeNull();
+  });
+});
+
 describe("buildSidecarRequest · interfaz generativa", () => {
   it("manda la especificación y la petición del usuario solo si la UI está activa", () => {
     const off = buildSidecarRequest(input, CONFIG, "t");
@@ -214,11 +222,27 @@ describe("sidecarCapabilities", () => {
     let seen: RequestInit | undefined;
     const fake: typeof fetch = async (_url, init) => {
       seen = init;
-      return Response.json({ claudeCode: { available: true, reason: null } });
+      return Response.json({ claudeCode: { available: true, reason: null, cliReady: true } });
     };
     const result = await sidecarCapabilities({ fetch: fake, config: CONFIG });
     expect(result.claudeCode.available).toBe(true);
     expect((seen?.headers as Record<string, string>).Authorization).toBe(`Bearer ${SECRET}`);
+  });
+
+  it("manda el token de la cuenta consultada, no uno común", async () => {
+    process.env.NEXUS_AGENT_SECRET = SECRET;
+    const { sidecarCapabilities } = await import("./nas-adk");
+    const bodies: string[] = [];
+    const fake: typeof fetch = async (_url, init) => {
+      bodies.push(String(init?.body));
+      return Response.json({ claudeCode: { available: true, reason: null, cliReady: true } });
+    };
+    await sidecarCapabilities({ fetch: fake, config: CONFIG }, "sk-ant-oat01-user");
+    await sidecarCapabilities({ fetch: fake, config: CONFIG });
+    expect(bodies).toEqual([
+      JSON.stringify({ claudeCodeToken: "sk-ant-oat01-user" }),
+      JSON.stringify({ claudeCodeToken: null }),
+    ]);
   });
 
   it("si el sidecar no responde, Claude Code queda no disponible con un motivo", async () => {
@@ -228,6 +252,83 @@ describe("sidecarCapabilities", () => {
       throw new Error("conexión rechazada");
     };
     const result = await sidecarCapabilities({ fetch: broken, config: CONFIG });
-    expect(result.claudeCode).toEqual({ available: false, reason: "El motor de agentes no responde." });
+    expect(result.claudeCode).toEqual({ available: false, reason: "El motor de agentes no responde.", cliReady: false });
+  });
+});
+
+describe("sidecarPost", () => {
+  it("firma la petición y devuelve estado y datos", async () => {
+    process.env.NEXUS_AGENT_SECRET = SECRET;
+    const { sidecarPost } = await import("./nas-adk");
+    let seenUrl = "";
+    let seen: RequestInit | undefined;
+    const fake: typeof fetch = async (url, init) => {
+      seenUrl = String(url);
+      seen = init;
+      return Response.json({ error: "caducado" }, { status: 404 });
+    };
+    const result = await sidecarPost("/v1/claude-code/login/finish", { owner: "u1" }, { deps: { fetch: fake, config: CONFIG } });
+    expect(seenUrl).toBe("http://agent:8090/v1/claude-code/login/finish");
+    expect(seen?.body).toBe(JSON.stringify({ owner: "u1" }));
+    expect((seen?.headers as Record<string, string>)["X-Nexus-Signature"]).toMatch(/^[0-9a-f]+$/);
+    expect(result).toEqual({ status: 404, data: { error: "caducado" } });
+  });
+
+  it("sin sidecar devuelve un error legible", async () => {
+    const { sidecarPost } = await import("./nas-adk");
+    expect(await sidecarPost("/x", {}, { deps: { config: null } })).toEqual({
+      status: 503,
+      data: { error: "El motor de agentes no está configurado." },
+    });
+    const broken: typeof fetch = async () => {
+      throw new Error("down");
+    };
+    expect((await sidecarPost("/x", {}, { deps: { fetch: broken, config: CONFIG } })).status).toBe(503);
+  });
+});
+
+describe("cupo de tokens en el run", () => {
+  const cap = (remainingTokens: number | null | undefined) =>
+    buildSidecarRequest({ ...input, credential: { ...input.credential, remainingTokens } }, CONFIG, "t").limits
+      .maxTotalTokens;
+
+  it("limita el run a lo que le queda a la cuenta", () => {
+    expect(cap(undefined)).toBeNull();
+    expect(cap(null)).toBeNull();
+    expect(cap(1234)).toBe(1234);
+  });
+
+  it("los ajustes de Claude Code viajan con el modelo", () => {
+    const request = buildSidecarRequest(
+      { ...input, credential: { ...input.credential, provider: "claude-code", timeoutS: 90, maxConcurrency: 3 } },
+      CONFIG,
+      "t",
+    );
+    expect(request.model).toMatchObject({ provider: "claude-code", timeoutS: 90, maxConcurrency: 3 });
+  });
+});
+
+describe("buildSidecarRequest · ajustes del asistente", () => {
+  it("manda el prompt, la generación y los límites de la instancia", async () => {
+    const { DEFAULT_ASSISTANT_SETTINGS } = await import("@/lib/instance/assistant");
+    const plain = buildSidecarRequest(input, CONFIG, "t");
+    expect(plain.prompts).toBeNull();
+    expect(plain.generation).toBeNull();
+    expect(plain.limits.maxTurns).toBe(24);
+
+    const assistant = {
+      ...DEFAULT_ASSISTANT_SETTINGS,
+      prompts: { core: "Eres {name}.", ui: null, followups: null },
+      generation: { temperature: 0.3, maxTokens: null, reasoningEffort: "high" as const },
+      limits: { maxTurns: 12, researchMaxTurns: 50, contextTokens: 100_000 },
+    };
+    const body = buildSidecarRequest(input, CONFIG, "t", null, assistant);
+    expect(body.prompts).toEqual(assistant.prompts);
+    expect(body.generation).toEqual(assistant.generation);
+    expect(body.limits.maxTurns).toBe(12);
+    expect(body.limits.maxModelCalls).toBe(40);
+    expect(body.limits.maxContextTokens).toBe(100_000);
+    // Los límites del turno (Research, salas) mandan sobre los de la instancia.
+    expect(buildSidecarRequest({ ...input, limits: { maxTurns: 50 } }, CONFIG, "t", null, assistant).limits.maxTurns).toBe(50);
   });
 });

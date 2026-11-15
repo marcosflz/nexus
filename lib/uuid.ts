@@ -12,11 +12,11 @@
  */
 export function randomId(): string {
   const webcrypto = globalThis.crypto;
+  return typeof webcrypto?.randomUUID === "function" ? webcrypto.randomUUID() : uuidFromRandomValues();
+}
 
-  if (typeof webcrypto?.randomUUID === "function") {
-    return webcrypto.randomUUID();
-  }
-
+function uuidFromRandomValues(): `${string}-${string}-${string}-${string}-${string}` {
+  const webcrypto = globalThis.crypto;
   const bytes = new Uint8Array(16);
   if (typeof webcrypto?.getRandomValues === "function") {
     webcrypto.getRandomValues(bytes);
@@ -31,11 +31,23 @@ export function randomId(): string {
   bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
 
   const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    hex.slice(12, 16),
-    hex.slice(16, 20),
-    hex.slice(20),
-  ].join("-");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * Define `crypto.randomUUID` donde el navegador no lo ofrece (HTTP sin cifrar).
+ *
+ * Nuestro código usa `randomId()`, pero las librerías no: los componentes de OpenUI
+ * llaman a `crypto.randomUUID()` al pintarse, y por HTTP en la LAN o por Tailscale
+ * cada uno fallaba y desaparecía de la interfaz generativa (los textos, los
+ * gráficos…), sin más pista que un error en la consola.
+ */
+export function installRandomUuid(): void {
+  const webcrypto = globalThis.crypto;
+  if (!webcrypto || typeof webcrypto.randomUUID === "function") return;
+  try {
+    Object.defineProperty(webcrypto, "randomUUID", { value: uuidFromRandomValues, configurable: true, writable: true });
+  } catch {
+    // Un `crypto` sellado: no hay nada que hacer aquí, y no debe romper el arranque.
+  }
 }

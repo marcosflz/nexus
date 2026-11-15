@@ -5,7 +5,9 @@ import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { isUniqueViolation } from "@/lib/db/errors";
 import type { ConnectorLink } from "@/lib/agents/backend";
 import type { AgentSpec } from "@/lib/agents/spec";
+import { hasPermission } from "@/lib/access";
 import { ensureBrowser } from "@/lib/sandbox/client";
+import { getUserAccess } from "@/lib/users";
 import { authHeaders, checkConnectorUrl } from "./validate";
 
 export const allowPrivateConnectors = () => /^(1|true|on|yes)$/i.test(process.env.NEXUS_ALLOW_PRIVATE_CONNECTORS ?? "");
@@ -113,8 +115,10 @@ export async function connectorsForRun(
   agentId: string | null,
   spec: AgentSpec,
 ): Promise<{ links: ConnectorLink[]; warning?: string }> {
-  const links = await resolveConnectors(userId, spec.connectors);
-  if (!agentId || !spec.computer.enabled) return { links };
+  // Se comprueba aquí para cubrir también a los agentes creados antes de retirar el permiso.
+  const account = await getUserAccess(userId);
+  const links = account && hasPermission(account, "connectors") ? await resolveConnectors(userId, spec.connectors) : [];
+  if (!agentId || !spec.computer.enabled || !account || !hasPermission(account, "computer")) return { links };
   const browser = await ensureBrowser(agentId);
   if (!browser.ok) return { links, warning: browser.error };
   return { links: [...links, browser.link] };

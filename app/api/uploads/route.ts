@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, permissionDenied } from "@/lib/auth";
 import { extractAttachment, MAX_UPLOAD_BYTES } from "@/lib/extract";
 
 export const runtime = "nodejs";
@@ -8,6 +8,8 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+  const denied = permissionDenied(user, "attachments");
+  if (denied) return denied;
 
   const form = await req.formData().catch(() => null);
   if (!form) return NextResponse.json({ error: "Petición no válida" }, { status: 400 });

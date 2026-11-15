@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { agentTriggers, agents } from "@/lib/db/schema";
+import { botTriggers, bots } from "@/lib/db/schema";
 import { createNotification } from "@/lib/notifications/store";
 import { enqueueJob } from "@/lib/worker/jobs";
 import type { FinishedInfo } from "./executor";
@@ -13,7 +13,7 @@ const preview = (text: string, max = 200) => (text.length > max ? `${text.slice(
 /**
  * Qué pasa cuando termina un run:
  *  - si lo lanzó una rutina o disparador, se avisa en la bandeja;
- *  - si fue bien, se disparan los agentes que esperan a este (`agent_completed`).
+ *  - si fue bien, se disparan los agentes que esperan a este (`bot_completed`).
  */
 export function makeOnFinished(options: { chainDepth?: number } = {}) {
   const depth = options.chainDepth ?? 0;
@@ -22,7 +22,7 @@ export function makeOnFinished(options: { chainDepth?: number } = {}) {
     const unattended = info.initiator !== "user";
 
     if (unattended) {
-      const base = { userId: info.userId, agentId: info.agentId, runId: info.runId, threadId: info.threadId };
+      const base = { userId: info.userId, agentId: null, runId: info.runId, threadId: info.threadId };
       if (info.outcome === "success") {
         await createNotification({ ...base, kind: "run_completed", title: `${info.agentName} ha terminado`, body: preview(info.text) });
       } else if (info.outcome === "error") {
@@ -38,7 +38,7 @@ export function makeOnFinished(options: { chainDepth?: number } = {}) {
       }
     }
 
-    if (info.outcome === "success" && info.agentId && depth < MAX_CHAIN_DEPTH) {
+    if (info.outcome === "success" && info.botId && depth < MAX_CHAIN_DEPTH) {
       await fireAgentCompleted(info, depth);
     }
   };
@@ -46,22 +46,22 @@ export function makeOnFinished(options: { chainDepth?: number } = {}) {
 
 /** Encola un run para cada agente que esté suscrito al fin de este (solo del mismo dueño). */
 async function fireAgentCompleted(info: FinishedInfo, depth: number): Promise<void> {
-  if (!info.agentId) return;
+  if (!info.botId) return;
   const rows = await db
-    .select({ id: agentTriggers.id, agentId: agentTriggers.agentId, prompt: agentTriggers.prompt, config: agentTriggers.config })
-    .from(agentTriggers)
-    .innerJoin(agents, eq(agents.id, agentTriggers.agentId))
-    .where(and(eq(agentTriggers.kind, "agent_completed"), eq(agentTriggers.enabled, true), eq(agents.ownerId, info.userId)));
+    .select({ id: botTriggers.id, botId: botTriggers.botId, prompt: botTriggers.prompt, config: botTriggers.config })
+    .from(botTriggers)
+    .innerJoin(bots, eq(bots.id, botTriggers.botId))
+    .where(and(eq(botTriggers.kind, "bot_completed"), eq(botTriggers.enabled, true), eq(bots.ownerId, info.userId)));
 
   for (const trigger of rows) {
-    const config = trigger.config as { sourceAgentId?: string };
+    const config = trigger.config as { sourceBotId?: string };
     // Un agente no se dispara a sí mismo: sería un bucle inmediato.
-    if (config.sourceAgentId !== info.agentId || trigger.agentId === info.agentId) continue;
+    if (config.sourceBotId !== info.botId || trigger.botId === info.botId) continue;
     await enqueueJob({
-      kind: "agent_run",
+      kind: "bot_run",
       dedupeKey: `chain:${info.runId}:${trigger.id}`,
       payload: {
-        agentId: trigger.agentId,
+        botId: trigger.botId,
         triggerId: trigger.id,
         prompt: trigger.prompt || "Otro agente ha terminado. Revisa su resultado y continúa con tu tarea.",
         context: `Resultado del agente «${info.agentName}»:\n${info.text.slice(0, 8000)}`,

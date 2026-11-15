@@ -2,11 +2,19 @@
 
 import { createContext, useContext } from "react";
 import type { ProjectSummary, ThreadSummary } from "@/components/chat/types";
+import type { Permission, UserRole } from "@/lib/access";
 
-export type SettingsSection = "account" | "preferences" | "models" | "connectors" | "usage" | "users";
+export type SettingsSection = "account" | "preferences" | "models" | "subscriptions" | "connectors" | "usage" | "search" | "assistant" | "claudeCode";
+
+export interface ShellUser {
+  id: string;
+  email: string;
+  role: UserRole;
+  permissions: Record<Permission, boolean>;
+}
 
 export interface ShellContextValue {
-  user: { id: string; email: string; role: "admin" | "user" };
+  user: ShellUser;
   threads: ThreadSummary[];
   projects: ProjectSummary[];
   /** Hilo abierto en la portada (`/`). null = portada vacía («¿Qué quieres saber?»). */
@@ -16,6 +24,11 @@ export interface ShellContextValue {
   /** Se incrementa en cada «Nuevo chat» para que el chat limpie adjuntos y estado. */
   newChatSignal: number;
   unread: number;
+  /** Hilos con una respuesta en curso (se muestra un spinner en la lista). */
+  runningThreadIds: string[];
+  /** Hilos que terminaron de responder mientras no se estaban mirando. */
+  unreadThreadIds: string[];
+  setThreadRunning(id: string, running: boolean): void;
 
   selectThread(id: string | null): void;
   newChat(projectId?: string | null): void;

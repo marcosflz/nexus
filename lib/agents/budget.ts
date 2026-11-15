@@ -49,3 +49,10 @@ export async function checkAgentBudget(agentId: string, spec: AgentSpec, userId:
   if (budgets.maxRunsPerDay === 0 && budgets.maxTokensPerDay === 0) return { ok: true };
   return evaluateBudget(budgets, await usageToday(agentId, userId));
 }
+
+export async function checkBotBudget(botId: string, spec: AgentSpec, userId: string): Promise<BudgetVerdict> {
+  if (spec.budgets.maxRunsPerDay === 0 && spec.budgets.maxTokensPerDay === 0) return { ok: true };
+  const [row] = await db.select({ runs: sql<number>`count(*)::int`, tokens: sql<number>`coalesce(sum((${runs.usage}->>'total')::bigint), 0)::bigint` })
+    .from(runs).where(and(eq(runs.botId, botId), eq(runs.userId, userId), gte(runs.createdAt, startOfUtcDay())));
+  return evaluateBudget(spec.budgets, { runsToday: row?.runs ?? 0, tokensToday: Number(row?.tokens ?? 0) });
+}

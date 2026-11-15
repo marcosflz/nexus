@@ -21,6 +21,11 @@ function toRun(row: typeof runs.$inferSelect): Run {
     backend: row.backend,
     agentId: row.agentId,
     agentVersionId: row.agentVersionId,
+    botId: row.botId,
+    computer: row.computer,
+    runtimeSnapshot: row.runtimeSnapshot,
+    groupId: row.groupId,
+    parentRunId: row.parentRunId,
     agentSessionId: row.agentSessionId,
     leaseUntil: row.leaseUntil,
     heartbeatAt: row.heartbeatAt,
@@ -38,6 +43,9 @@ export interface CreateRunOptions {
   parentRunId?: string | null;
   agentId?: string | null;
   agentVersionId?: string | null;
+  botId?: string | null;
+  computer?: boolean;
+  groupId?: string | null;
 }
 
 export async function createRun(
@@ -59,6 +67,9 @@ export async function createRun(
       parentRunId: options.parentRunId ?? null,
       agentId: options.agentId ?? null,
       agentVersionId: options.agentVersionId ?? null,
+      botId: options.botId ?? null,
+      computer: options.computer ?? false,
+      groupId: options.groupId ?? null,
       leaseUntil: new Date(now.getTime() + RUN_LEASE_MS),
       heartbeatAt: now,
     })
@@ -202,13 +213,13 @@ export async function getRun(
 }
 
 /** Sesión guardada de un run en pausa. */
-export async function getRunCheckpoint(runId: string): Promise<unknown[] | null> {
+export async function getRunCheckpoint(runId: string): Promise<unknown[] | Record<string, unknown> | null> {
   const [row] = await db
     .select({ checkpoint: runs.checkpoint })
     .from(runs)
     .where(eq(runs.id, runId))
     .limit(1);
-  return Array.isArray(row?.checkpoint) ? (row.checkpoint as unknown[]) : null;
+  return row?.checkpoint && typeof row.checkpoint === "object" ? row.checkpoint as unknown[] | Record<string, unknown> : null;
 }
 
 /**

@@ -4,14 +4,15 @@
 FROM node:24-bookworm-slim AS deps
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-# El .npmrc debe estar presente ANTES del install: fija legacy-peer-deps, sin lo
-# cual npm aborta por el conflicto zustand 4 (OpenUI) / zustand 5 (assistant-ui).
-COPY package.json package-lock.json .npmrc ./
-RUN npm ci --no-audit --no-fund
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+# Corepack instala la versión de pnpm fijada en package.json (packageManager).
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 COPY . .
-RUN npm run build && npm prune --omit=dev
+RUN pnpm run build && pnpm prune --prod
 
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /app

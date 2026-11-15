@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq, exists, ilike, isNull, or } from "drizzle-orm";
+import { and, desc, eq, exists, ilike, isNull, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { messages, threads } from "@/lib/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { likePattern } from "@/lib/sql";
-import { ownedProject } from "@/lib/threads/queries";
+import { ownedProject, threadRunning } from "@/lib/threads/queries";
 
 export const runtime = "nodejs";
 
@@ -26,11 +26,16 @@ export async function GET(req: NextRequest) {
       updatedAt: threads.updatedAt,
       pinnedAt: threads.pinnedAt,
       projectId: threads.projectId,
+      running: threadRunning(),
     })
     .from(threads)
     .where(
       and(
         eq(threads.userId, user.id),
+        // Los hilos de las salas de NexBots viven en su sala.
+        ne(threads.origin, "room"),
+        ne(threads.origin, "skill_creator"),
+        ne(threads.origin, "skill_test"),
         pattern
           ? or(
               ilike(threads.title, pattern),

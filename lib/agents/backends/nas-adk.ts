@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readSse } from "@/lib/agui/client";
 import type { AgUiEvent } from "@/lib/agui/events";
 import { defaultAgentSpec, toSidecarAgent } from "@/lib/agents/spec";
@@ -5,6 +6,7 @@ import { openUiSpec } from "@/lib/openui/profiles";
 import { focusInstruction, researchInstruction } from "@/lib/focus";
 import { signRunToken, signSidecarRequest } from "@/lib/internal/token";
 import type { TokenUsage } from "@/lib/agents/usage";
+import type { AssistantSettings } from "@/lib/instance/assistant";
 import type { SourceItem } from "@/lib/sources";
 import type {
   AgentBackend,
@@ -42,13 +44,33 @@ interface SidecarResult {
   sources?: SourceItem[];
   followups?: string[];
   interrupts?: BackendInterrupt[];
-  checkpoint?: unknown[];
+  checkpoint?: unknown[] | Record<string, unknown>;
+}
+
+export interface SidecarSearchConfig {
+  providers: { id: string; apiKey: string | null; baseUrl: string | null }[];
+  minResults: number;
 }
 
 export interface NasAdkDeps {
   fetch?: typeof fetch;
   config?: NasAdkConfig | null;
   now?: () => number;
+  /** Motores de búsqueda de la instancia; `null`, el SearXNG del entorno del sidecar. */
+  search?: () => Promise<SidecarSearchConfig | null>;
+  /** Prompt y parámetros del modelo de la instancia; `null`, los del sidecar. */
+  assistant?: () => Promise<AssistantSettings | null>;
+}
+
+async function instanceAssistant(): Promise<AssistantSettings | null> {
+  const { assistantSettings } = await import("@/lib/instance/assistant");
+  return assistantSettings();
+}
+
+/** Se importa aquí para que este módulo no arrastre la base de datos a sus pruebas. */
+async function instanceSearch(): Promise<SidecarSearchConfig | null> {
+  const { searchRuntime } = await import("@/lib/instance/search");
+  return searchRuntime();
 }
 
 const MAX_HISTORY = 24;
@@ -69,7 +91,11 @@ function sidecarUi(input: BackendRunInput, openuiOff: boolean) {
  * Contexto máximo por llamada al modelo. El de nas.adk por defecto (16k tokens)
  * se agota con dos páginas leídas y la especificación de OpenUI.
  */
-export function contextTokens(env: Record<string, string | undefined> = process.env): number {
+export function contextTokens(
+  env: Record<string, string | undefined> = process.env,
+  configured: number | null = null,
+): number {
+  if (configured !== null) return configured;
   const value = Number(env.NEXUS_AGENT_CONTEXT_TOKENS);
   return Number.isInteger(value) && value >= 8000 ? Math.min(value, 1_000_000) : 64_000;
 }
@@ -87,6 +113,12 @@ export function friendlyAgentError(message: string): string {
   return message;
 }
 
+/** El tope más estricto entre el del agente (0 = sin límite) y lo que le queda a la cuenta. */
+function tokenCap(agentLimit: number, remaining: number | null | undefined): number | null {
+  const caps = [agentLimit || null, remaining ?? null].filter((cap): cap is number => cap !== null);
+  return caps.length > 0 ? Math.min(...caps) : null;
+}
+
 /** Instrucciones del foco (académico, Reddit…) y del modo Research para este turno. */
 export function turnInstructions(input: Pick<BackendRunInput, "focus" | "mode">): string | null {
   const blocks: string[] = [];
@@ -97,8 +129,15 @@ export function turnInstructions(input: Pick<BackendRunInput, "focus" | "mode">)
 }
 
 /** Cuerpo de `POST /v1/runs` (ver `services/agent/nexus_agent/contract.py`). */
-export function buildSidecarRequest(input: BackendRunInput, config: NasAdkConfig, runToken: string) {
+export function buildSidecarRequest(
+  input: BackendRunInput,
+  config: NasAdkConfig,
+  runToken: string,
+  search: SidecarSearchConfig | null = null,
+  assistant: AssistantSettings | null = null,
+) {
   const spec = input.agent?.spec ?? defaultAgentSpec();
+  const maxTurns = input.limits?.maxTurns ?? assistant?.limits.maxTurns ?? 24;
   const ui = sidecarUi(input, spec.ui.openui === "off");
   return {
     runId: input.runId,
@@ -111,6 +150,8 @@ export function buildSidecarRequest(input: BackendRunInput, config: NasAdkConfig
       model: input.credential.model,
       apiKey: input.credential.apiKey,
       baseUrl: input.credential.baseUrl,
+      timeoutS: input.credential.timeoutS,
+      maxConcurrency: input.credential.maxConcurrency,
     },
     history: (input.history ?? [])
       .slice(-MAX_HISTORY)
@@ -121,52 +162,127 @@ export function buildSidecarRequest(input: BackendRunInput, config: NasAdkConfig
     mode: input.mode ?? null,
     turnInstructions: turnInstructions(input),
     checkpoint: input.checkpoint ?? null,
+    skills: input.skillRefs ?? [],
+    explicitSkills: input.explicitSkills ?? [],
+    skillScripts: input.skillScripts === true,
+    skillCreator: Boolean(input.creatorDraftId),
     resume: input.resume ?? null,
     connectors: input.connectors ?? [],
+    search,
+    computer: input.computer === true,
+    room: input.room ?? null,
     ui,
+    prompts: assistant?.prompts ?? null,
+    generation: assistant?.generation ?? null,
     limits: {
-      maxTurns: input.limits?.maxTurns ?? 24,
-      maxModelCalls: Math.max(40, (input.limits?.maxTurns ?? 24) * 2),
+      maxTurns,
+      maxModelCalls: Math.max(40, maxTurns * 2),
       timeoutS: 600,
-      maxTotalTokens: spec.budgets.maxTokensPerRun || null,
+      maxTotalTokens: tokenCap(spec.budgets.maxTokensPerRun, input.credential.remainingTokens),
       // Sin la especificación en las instrucciones, `openui_spec` la devuelve como
       // resultado de herramienta y tiene que caber entera (~33k caracteres).
       maxToolResultChars: spec.ui.openui === "off" || ui ? 16_000 : 40_000,
-      maxContextTokens: contextTokens(),
+      maxContextTokens: contextTokens(process.env, assistant?.limits.contextTokens ?? null),
     },
     bff: { baseUrl: config.internalUrl, runToken },
   };
 }
 
+export interface ClaudeCodeCapability {
+  /** Listo para usarse con la cuenta consultada. */
+  available: boolean;
+  reason: string | null;
+  /** El CLI del sidecar está instalado y es compatible (independiente de la cuenta). */
+  cliReady: boolean;
+}
+
 export interface SidecarCapabilities {
-  claudeCode: { available: boolean; reason: string | null };
+  claudeCode: ClaudeCodeCapability;
 }
 
 const CAPABILITIES_TTL_MS = 30_000;
-let capabilitiesCache: { value: SidecarCapabilities; expires: number } | null = null;
+const CAPABILITIES_MAX_ENTRIES = 200;
+// Una entrada por cuenta (hash del token, nunca el token en claro) y otra sin cuenta.
+const capabilitiesCache = new Map<string, { value: SidecarCapabilities; expires: number }>();
 
-/** Lo que depende del contenedor del sidecar. Si no responde, nada está disponible. */
-export async function sidecarCapabilities(deps: NasAdkDeps = {}): Promise<SidecarCapabilities> {
+function capabilitiesKey(token: string | null): string {
+  return token ? createHash("sha256").update(token).digest("hex") : "";
+}
+
+/** Olvida el estado cacheado (de una cuenta, o de todas sin argumento). */
+export function resetSidecarCapabilities(claudeCodeToken?: string | null): void {
+  if (claudeCodeToken === undefined) capabilitiesCache.clear();
+  else capabilitiesCache.delete(capabilitiesKey(claudeCodeToken));
+}
+
+/**
+ * Lo que depende del contenedor del sidecar. `claudeCodeToken` es el de la cuenta de
+ * Anthropic que ha vinculado el usuario; sin él solo se comprueba el CLI. Si no responde,
+ * nada está disponible.
+ */
+export async function sidecarCapabilities(
+  deps: NasAdkDeps = {},
+  claudeCodeToken: string | null = null,
+): Promise<SidecarCapabilities> {
   const now = deps.now?.() ?? Date.now();
-  if (!deps.fetch && capabilitiesCache && now < capabilitiesCache.expires) return capabilitiesCache.value;
+  const key = capabilitiesKey(claudeCodeToken);
+  const hit = capabilitiesCache.get(key);
+  if (!deps.fetch && hit && now < hit.expires) return hit.value;
 
   const config = deps.config === undefined ? nasAdkConfig() : deps.config;
-  const down = (reason: string): SidecarCapabilities => ({ claudeCode: { available: false, reason } });
+  const down = (reason: string): SidecarCapabilities => ({
+    claudeCode: { available: false, reason, cliReady: false },
+  });
   if (!config) return down("El motor de agentes no está configurado.");
 
   try {
+    const body = JSON.stringify({ claudeCodeToken });
     const response = await (deps.fetch ?? fetch)(`${config.url}/v1/capabilities`, {
-      headers: signSidecarRequest("", { now }),
+      method: "POST",
+      body,
+      headers: { "Content-Type": "application/json", ...signSidecarRequest(body, { now }) },
       // Puede arrancar el CLI varias veces si la caché del sidecar ha caducado.
       signal: AbortSignal.timeout(20_000),
       cache: "no-store",
     });
     if (!response.ok) return down(`El motor de agentes respondió ${response.status}.`);
     const value = (await response.json()) as SidecarCapabilities;
-    if (!deps.fetch) capabilitiesCache = { value, expires: now + CAPABILITIES_TTL_MS };
+    if (!deps.fetch) {
+      for (const [k, entry] of capabilitiesCache) if (now >= entry.expires) capabilitiesCache.delete(k);
+      if (capabilitiesCache.size >= CAPABILITIES_MAX_ENTRIES) capabilitiesCache.clear();
+      capabilitiesCache.set(key, { value, expires: now + CAPABILITIES_TTL_MS });
+    }
     return value;
   } catch {
     return down("El motor de agentes no responde.");
+  }
+}
+
+/**
+ * POST firmado a un endpoint del sidecar. Devuelve el estado y el JSON, o un error legible
+ * si el sidecar no está configurado o no responde.
+ */
+export async function sidecarPost<T>(
+  path: string,
+  payload: unknown,
+  options: { timeoutMs?: number; deps?: NasAdkDeps } = {},
+): Promise<{ status: number; data: T | { error?: string } }> {
+  const deps = options.deps ?? {};
+  const config = deps.config === undefined ? nasAdkConfig() : deps.config;
+  if (!config) return { status: 503, data: { error: "El motor de agentes no está configurado." } };
+  const body = JSON.stringify(payload);
+  try {
+    const response = await (deps.fetch ?? fetch)(`${config.url}${path}`, {
+      method: "POST",
+      body,
+      headers: { "Content-Type": "application/json", ...signSidecarRequest(body, { now: deps.now?.() }) },
+      signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
+      cache: "no-store",
+    });
+    const data = (await response.json().catch(() => ({}))) as T | { error?: string };
+    return { status: response.status, data };
+  } catch {
+    return { status: 503, data: { error: "El motor de agentes no responde." } };
   }
 }
 
@@ -186,7 +302,11 @@ export function createNasAdkBackend(deps: NasAdkDeps = {}): AgentBackend {
         { runId: input.runId, userId: input.userId, agentId: input.agent?.id ?? null },
         { now },
       );
-      const body = JSON.stringify(buildSidecarRequest(input, config, runToken));
+      const search = await (deps.search ?? (deps.fetch ? async () => null : instanceSearch))();
+      const assistant = await (deps.assistant ?? (deps.fetch ? async () => null : instanceAssistant))().catch(
+        () => null,
+      );
+      const body = JSON.stringify(buildSidecarRequest(input, config, runToken, search, assistant));
 
       const response = await doFetch(`${config.url}/v1/runs`, {
         method: "POST",

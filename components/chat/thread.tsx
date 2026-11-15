@@ -78,10 +78,10 @@ function MessageTime() {
 function UserMessage() {
   return (
     <MessagePrimitive.Root className="group animate-in fade-in-0 slide-in-from-bottom-1 flex flex-col items-end pt-10 duration-300 first:pt-2">
-      <div className="flex w-full items-start justify-end gap-2">
+      <div className="flex w-full items-start justify-end gap-2 max-sm:flex-col-reverse max-sm:items-end max-sm:gap-0">
         <ActionBarPrimitive.Root
           hideWhenRunning
-          className="mt-2 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+          className="mt-2 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 max-sm:mt-1 [@media(hover:none)]:opacity-100"
         >
           <MessageTime />
           <ActionBarPrimitive.Edit asChild>
@@ -110,7 +110,7 @@ function EditComposer() {
       <ComposerPrimitive.Root className="border-border-strong bg-surface flex w-full flex-col gap-2 rounded-2xl border p-3">
         <ComposerPrimitive.Input
           autoFocus
-          className="max-h-60 min-h-12 w-full resize-none bg-transparent px-1 py-1 text-[15px] outline-none"
+          className="max-h-60 min-h-12 w-full resize-none bg-transparent px-1 py-1 text-[16px] outline-none sm:text-[15px]"
         />
         <div className="flex justify-end gap-2">
           <ComposerPrimitive.Cancel asChild>
@@ -253,13 +253,34 @@ export interface AgentOption {
   avatar: string;
 }
 
+export interface ModelChoiceOption {
+  provider: string;
+  model: string;
+}
+
+export interface ModelGroupOption {
+  provider: string;
+  label: string;
+  kind: "api" | "subscription";
+  models: { id: string; label: string }[];
+}
+
 export interface ChatThreadProps {
+  skills?: { name: string; description: string }[];
+  selectedSkills?: string[];
+  onSkillsChange?: (names: string[]) => void;
   isEmpty: boolean;
   loading: boolean;
   agentName?: string;
   projectName: string | null;
   onClearProject: () => void;
-  modelLabel: string | null;
+  /** Modelos activos de todos los proveedores, agrupados. */
+  modelGroups: ModelGroupOption[];
+  /** Modelo elegido en el selector (se usa si el agente no fija uno). */
+  selectedModel: ModelChoiceOption | null;
+  onModelChange: (choice: ModelChoiceOption) => void;
+  /** Modelo fijo del agente elegido, si lo tiene: el selector queda bloqueado. */
+  agentModel: { provider?: string; model?: string } | null;
   starters?: string[];
   agents: AgentOption[];
   agentId: string | null;
@@ -336,7 +357,7 @@ export function ChatThread(props: ChatThreadProps) {
             </ul>
           ) : null}
         </div>
-        <footer className="text-muted-fg pb-4 text-center text-[12px]">Nexus · Tus claves, tus datos</footer>
+        <footer className="text-muted-fg pb-[max(1rem,env(safe-area-inset-bottom))] text-center text-[12px]">Nexus · Tus claves, tus datos</footer>
       </ThreadPrimitive.Root>
     );
   }
@@ -348,7 +369,7 @@ export function ChatThread(props: ChatThreadProps) {
           <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage, EditComposer }} />
         </div>
       </ThreadPrimitive.Viewport>
-      <div className="from-bg sticky bottom-0 bg-gradient-to-t from-60% to-transparent px-4 pt-6 pb-4">
+      <div className="from-bg sticky bottom-0 bg-gradient-to-t from-60% to-transparent px-3 pt-6 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-4">
         <div className="mx-auto w-full max-w-[760px]">
           <Composer {...props} placeholder="Haz una pregunta de seguimiento" />
         </div>

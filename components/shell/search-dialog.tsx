@@ -77,9 +77,11 @@ export function SearchDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               <CommandItem onSelect={() => run(() => shell.newChat())}>
                 <Plus /> Nuevo chat <CommandShortcut>Ctrl ⇧ O</CommandShortcut>
               </CommandItem>
-              <CommandItem onSelect={() => run(() => router.push("/agents"))}>
-                <Bot /> Agentes
-              </CommandItem>
+              {shell.user.permissions.skills ? (
+                <CommandItem onSelect={() => run(() => router.push("/skills"))}>
+                  <Bot /> Skills
+                </CommandItem>
+              ) : null}
               <CommandItem onSelect={() => run(() => router.push("/inbox"))}>
                 <Inbox /> Bandeja
               </CommandItem>

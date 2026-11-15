@@ -25,7 +25,8 @@ services:
       NEXUS_AGENT_SECRET: ${NEXUS_AGENT_SECRET}
       NEXUS_AGENT_CONTEXT_TOKENS: ${NEXUS_AGENT_CONTEXT_TOKENS:-64000}
       NEXUS_INTERNAL_URL: http://app:3000
-      # Correos (separados por comas) que son admin en cada arranque.
+      # Correos (separados por comas) que reciben ese rol en cada arranque.
+      NEXUS_SUPERADMIN_EMAILS: ${NEXUS_SUPERADMIN_EMAILS:-}
       NEXUS_ADMIN_EMAILS: ${NEXUS_ADMIN_EMAILS:-}
       # Solo si se despliega el perfil «computer»: gestor de los navegadores de los agentes.
       NEXUS_SANDBOXD_URL: ${NEXUS_SANDBOXD_URL:-}
@@ -49,9 +50,10 @@ services:
     environment:
       NEXUS_AGENT_SECRET: ${NEXUS_AGENT_SECRET:?define NEXUS_AGENT_SECRET en .env (openssl rand -hex 32)}
       SEARXNG_URL: http://searxng:8080
-      # Proveedor «Claude Code (suscripción)». No añadas variables ANTHROPIC_* aquí:
-      # nas-adk se niega a arrancar el CLI para no facturar por API sin querer.
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Proveedor «Claude Code (suscripción)». Cada usuario vincula su propia cuenta de
+      # Anthropic desde la web: aquí no va ningún token (CLAUDE_CODE_OAUTH_TOKEN se ignora).
+      # No añadas variables ANTHROPIC_*: nas-adk se niega a arrancar el CLI para no facturar
+      # por API sin querer.
       CLAUDE_CODE_MAX_CONCURRENCY: ${CLAUDE_CODE_MAX_CONCURRENCY:-2}
       CLAUDE_CODE_TIMEOUT: ${CLAUDE_CODE_TIMEOUT:-300}
     # Además de la red interna, el sidecar llega a los navegadores de los agentes (perfil «computer»).
@@ -76,9 +78,11 @@ services:
     environment:
       CONTAINERS: 1
       VOLUMES: 1
+      # Cada NexBot tiene su propia red interna.
+      NETWORKS: 1
       POST: 1
       DELETE: 1
-      # Todo lo demás (imágenes, redes, exec, servicios, swarm…) queda denegado.
+      # Todo lo demás (imágenes, exec, servicios, swarm…) queda denegado.
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [sandboxd]
@@ -95,9 +99,36 @@ services:
       DOCKER_HOST: http://docker-proxy:2375
       SANDBOX_NETWORK: nexus-sandbox
       SANDBOX_IMAGE: ${SANDBOX_IMAGE:-mcr.microsoft.com/playwright/mcp:latest}
-    depends_on: [docker-proxy]
+      # NexBots: imagen del runtime y servicios que se conectan a la red de cada bot.
+      BOT_IMAGE: ${BOT_IMAGE:-nexus-nexbot:latest}
+      BOT_EGRESS_CONTAINER: nexus-bot-egress
+      BOT_CONTROL_CONTAINERS: nexus-sandboxd,nexus-agent
+    depends_on: [docker-proxy, bot-egress]
     networks: [default, sandboxd]
     expose: ["8095"]
+
+  # Única salida a internet de los NexBots. Rechaza los destinos privados tras resolver
+  # el DNS. No tiene acceso a Docker ni a ningún secreto.
+  bot-egress:
+    profiles: ["computer"]
+    build:
+      context: ./services/sandboxd
+      dockerfile: ../../docker/sandboxd.Dockerfile
+    container_name: nexus-bot-egress
+    restart: unless-stopped
+    command: ["python", "-m", "sandboxd.egress"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [egress]
+
+  # Solo construye la imagen del runtime: los contenedores de los bots los crea sandboxd.
+  nexbot-image:
+    profiles: ["build-only"]
+    build:
+      context: ./services/nexbot
+      dockerfile: ../../docker/nexbot.Dockerfile
+    image: nexus-nexbot:latest
 
   db:
     image: postgres:18-alpine
@@ -135,6 +166,9 @@ networks:
     name: nexus-sandbox
   sandboxd:
     internal: true
+  # Salida a internet del proxy de los NexBots, separada del resto de servicios.
+  egress:
+    name: nexus-bot-egress-net
 
 volumes:
   # Los nombres se fijan a los que se crearon cuando el proyecto se llamaba

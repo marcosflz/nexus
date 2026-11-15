@@ -10,8 +10,8 @@ const bodySchema = z.object({ query: z.string().min(1).max(500), topK: z.number(
 export async function POST(req: Request) {
   const auth = await authenticateInternal(req);
   if (!auth.ok) return auth.response;
-  const agentId = auth.run.agentId;
-  if (!agentId) return Response.json({ results: [] });
+  const agentId = auth.run.botId;
+  if (!agentId || !auth.run.runtimeSnapshot?.spec.knowledge.enabled) return Response.json({ results: [] });
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Petición no válida" }, { status: 400 });
@@ -24,7 +24,7 @@ export async function POST(req: Request) {
       name: hit.name,
       ordinal: hit.ordinal,
       content: hit.content,
-      url: `${base}/api/agents/${agentId}/knowledge/${hit.fileId}`,
+      url: `${base}/api/bots/${agentId}/knowledge/${hit.fileId}`,
     })),
   });
 }

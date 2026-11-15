@@ -1,6 +1,6 @@
 import { and, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { memories } from "@/lib/db/schema";
+import { botMemories as memories } from "@/lib/db/schema";
 import { likePattern } from "@/lib/sql";
 
 export const MAX_MEMORIES_PER_SCOPE = 200;
@@ -9,14 +9,14 @@ const MAX_VALUE = 1000;
 
 export interface MemoryScope {
   userId: string;
-  /** Null = memoria personal del usuario; con id, memoria de ese agente. */
-  agentId: string | null;
+  /** Null = memoria personal del usuario; con id, memoria de ese Nexbot. */
+  botId: string | null;
 }
 
 const scopeFilter = (scope: MemoryScope) =>
   and(
     eq(memories.userId, scope.userId),
-    scope.agentId ? eq(memories.agentId, scope.agentId) : isNull(memories.agentId),
+    scope.botId ? eq(memories.botId, scope.botId) : isNull(memories.botId),
     isNull(memories.deletedAt),
   );
 
@@ -52,7 +52,7 @@ export async function remember(scope: MemoryScope, rawKey: string, rawValue: str
   if (count >= MAX_MEMORIES_PER_SCOPE) {
     return { ok: false, error: "La memoria está llena: olvida algo antes de guardar más" };
   }
-  await db.insert(memories).values({ userId: scope.userId, agentId: scope.agentId, key, value });
+  await db.insert(memories).values({ userId: scope.userId, botId: scope.botId, key, value });
   return { ok: true, key, updated: false };
 }
 

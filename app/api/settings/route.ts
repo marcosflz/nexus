@@ -1,119 +1,84 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { mayUseClaudeCode, modelAllowed, providerAllowed } from "@/lib/access";
 import { getCurrentUser } from "@/lib/auth";
-import { deleteCredential, getCredentialRow, listCredentials, saveCredential } from "@/lib/credentials";
-import { decryptSecret, encryptSecret } from "@/lib/crypto";
-import { sidecarCapabilities } from "@/lib/agents/backends/nas-adk";
-import { CLAUDE_CODE_PROVIDER, getProvider, PROVIDERS } from "@/lib/providers";
+import { deleteCredential, getCredentialRow, saveProviderConfig } from "@/lib/credentials";
+import { encryptSecret } from "@/lib/crypto";
+import { providerViews } from "@/lib/models/available";
+import { getProvider } from "@/lib/providers";
 
 export const runtime = "nodejs";
+export const maxDuration = 30;
+
+const modelEntry = z.object({ id: z.string().trim().min(1).max(200), label: z.string().trim().min(1).max(200) });
 
 const putSchema = z.object({
   provider: z.string().min(1),
-  model: z.string().min(1).max(200),
   apiKey: z.string().max(500).optional(),
   baseUrl: z.string().url().optional().or(z.literal("")),
+  enabled: z.boolean().optional(),
+  /** Modelos que el usuario quiere ver de este proveedor. */
+  models: z.array(modelEntry).max(500).optional(),
+  /** Modelo predeterminado del proveedor (debe estar entre los activos). */
+  model: z.string().trim().max(200).optional(),
 });
 
+/** Proveedores disponibles para esta cuenta y su configuración (varios activos a la vez). */
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-
-  const mayUseClaudeCode = user.role === "admin" || user.canUseClaudeCode;
-  // Quien no tiene permiso no ve el proveedor, ni aunque le quedara guardado de antes.
-  const rows = (await listCredentials(user.id)).filter(
-    (item) => mayUseClaudeCode || item.provider !== CLAUDE_CODE_PROVIDER,
-  );
-  const row = rows[0];
-  const claudeCode = mayUseClaudeCode ? (await sidecarCapabilities()).claudeCode : null;
-
-  return NextResponse.json({
-    providers: PROVIDERS.filter((item) => item.requires !== "claudeCode" || mayUseClaudeCode).map(
-      ({ id, label, needsKey, defaultModel, modelsUrl, modelOptions, requires }) => ({
-        id,
-        label,
-        needsKey,
-        defaultModel,
-        canListModels: Boolean(modelsUrl),
-        modelOptions: modelOptions ?? null,
-        serverManaged: requires === "claudeCode",
-        // Motivo por el que no se puede usar ahora mismo; null si está listo.
-        unavailable:
-          requires === "claudeCode" && claudeCode && !claudeCode.available
-            ? (claudeCode.reason ?? "No disponible")
-            : null,
-      }),
-    ),
-    credential: row
-      ? {
-          provider: row.provider,
-          model: row.model,
-          baseUrl: row.baseUrl,
-          hasKey: Boolean(row.apiKeyEnc),
-        }
-      : null,
-    // Una entrada por proveedor ya configurado, para recordar clave y modelo al cambiar.
-    saved: rows.map((item) => ({
-      provider: item.provider,
-      model: item.model,
-      baseUrl: item.baseUrl,
-      hasKey: Boolean(item.apiKeyEnc),
-      isDefault: item.isDefault,
-    })),
-  });
+  return NextResponse.json({ providers: await providerViews(user) });
 }
 
+/** Guarda la configuración de UN proveedor sin cambiar cuál es el predeterminado. */
 export async function PUT(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
   const parsed = putSchema.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Datos no válidos" }, { status: 400 });
-  }
-  const { provider, model, apiKey, baseUrl } = parsed.data;
+  if (!parsed.success) return NextResponse.json({ error: "Datos no válidos" }, { status: 400 });
+  const { provider, apiKey, baseUrl, enabled, models, model } = parsed.data;
 
   const info = getProvider(provider);
-  if (!info) {
-    return NextResponse.json({ error: "Proveedor no soportado" }, { status: 400 });
+  if (!info || !providerAllowed(user, provider)) {
+    return NextResponse.json({ error: "Proveedor no disponible para tu cuenta" }, { status: 403 });
   }
-  if (info.requires === "claudeCode") {
-    if (user.role !== "admin" && !user.canUseClaudeCode) {
-      return NextResponse.json({ error: "Un administrador debe darte permiso para usar Claude Code" }, { status: 403 });
-    }
-    const { claudeCode } = await sidecarCapabilities();
-    if (!claudeCode.available) {
-      return NextResponse.json({ error: claudeCode.reason ?? "Claude Code no está disponible" }, { status: 409 });
-    }
-    await saveCredential({ userId: user.id, provider, model, apiKeyEnc: undefined, baseUrl: null });
-    return NextResponse.json({ ok: true });
+  if (info.requires && !mayUseClaudeCode(user)) {
+    return NextResponse.json({ error: "Un administrador debe darte permiso para usar suscripciones" }, { status: 403 });
   }
-
-  if (info.needsKey && !apiKey) {
-    const existing = await getCredentialRow(user.id, provider);
-    if (!existing?.apiKeyEnc) {
-      return NextResponse.json(
-        { error: "Este proveedor requiere una API key" },
-        { status: 400 },
-      );
-    }
+  const denied = [...(models ?? []).map((m) => m.id), ...(model ? [model] : [])].find(
+    (id) => !modelAllowed(user, provider, id),
+  );
+  if (denied) return NextResponse.json({ error: `Tu cuenta no tiene acceso al modelo ${denied}` }, { status: 403 });
+  if (model && models && !models.some((m) => m.id === model)) {
+    return NextResponse.json({ error: "El modelo predeterminado debe estar entre los activos" }, { status: 400 });
   }
 
-  await saveCredential({
+  const existing = await getCredentialRow(user.id, provider);
+  const linked = info.linkFlow !== "key";
+  if (linked && !existing) {
+    return NextResponse.json({ error: `Primero vincula tu cuenta de ${info.label}` }, { status: 409 });
+  }
+  if (!linked && info.needsKey && !apiKey?.trim() && !existing?.apiKeyEnc) {
+    return NextResponse.json({ error: "Este proveedor requiere una API key" }, { status: 400 });
+  }
+
+  await saveProviderConfig({
     userId: user.id,
     provider,
-    model,
-    apiKeyEnc: apiKey && apiKey.trim().length > 0 ? encryptSecret(apiKey.trim()) : undefined,
-    baseUrl: baseUrl && baseUrl.length > 0 ? baseUrl : null,
+    // Las suscripciones vinculadas nunca reciben una clave por aquí.
+    apiKeyEnc: !linked && apiKey?.trim() ? encryptSecret(apiKey.trim()) : undefined,
+    baseUrl: linked ? undefined : baseUrl === undefined ? undefined : baseUrl || null,
+    enabled,
+    models,
+    model: model ?? (existing ? undefined : (models?.[0]?.id ?? info.defaultModel)),
   });
-
   return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-
   const provider = req.nextUrl.searchParams.get("provider");
   if (!provider) return NextResponse.json({ error: "Indica el proveedor" }, { status: 400 });
   await deleteCredential(user.id, provider);

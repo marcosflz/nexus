@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 
 from nas.adk.models import ModelRouter
 from nas.adk.models.base_llm import BaseLlm, LlmRequest, LlmResponse
+from nas.adk.models.chatgpt import ChatGptPlanLlm
 from nas.adk.models.claude_code.llm import ClaudeCodeLlm
 
 from .contract import ModelSpec
@@ -25,32 +27,60 @@ class UnsupportedProvider(ValueError):
 def _anthropic_root(url: str) -> str:
     """El SDK de Anthropic añade /v1 por su cuenta; se acepta la URL con o sin él."""
     url = url.rstrip("/")
-    return url[: -len("/v1")] if url.endswith("/v1") else url
+    return url.removesuffix("/v1")
 
 
-_claude_code_slots: asyncio.Semaphore | None = None
+# Una cola por cuenta de Anthropic (hash del token): cada suscripción tiene sus propios
+# límites y los runs de una persona no deben bloquear los de otra.
+_claude_code_slots: dict[str, tuple[int, asyncio.Semaphore]] = {}
+
+
+def _account_slots(token: str, limit: int) -> asyncio.Semaphore:
+    key = hashlib.sha256(token.encode()).hexdigest()
+    current = _claude_code_slots.get(key)
+    if current is None or current[0] != limit:
+        current = (limit, asyncio.Semaphore(limit))
+        _claude_code_slots[key] = current
+    return current[1]
 
 
 class SharedClaudeCodeLlm(ClaudeCodeLlm):
-    """Claude Code con un límite de concurrencia común a todos los runs.
+    """Claude Code con un límite de concurrencia común a todos los runs de la misma cuenta.
 
     Cada run crea su propio modelo, así que el semáforo interno de ``ClaudeCodeLlm``
-    no limitaría nada entre runs; la suscripción es una sola para toda la instancia.
+    no limitaría nada entre runs.
     """
 
     async def generate_content_async(self, request: LlmRequest) -> LlmResponse:
-        global _claude_code_slots
-        if _claude_code_slots is None:
-            _claude_code_slots = asyncio.Semaphore(self.max_concurrency)
-        async with _claude_code_slots:
+        assert self.oauth_token is not None
+        async with _account_slots(self.oauth_token.get_secret_value(), self.max_concurrency):
             return await super().generate_content_async(request)
+
+
+class MissingAccount(UnsupportedProvider):
+    pass
 
 
 def build_model(spec: ModelSpec, *, session_id: str | None = None) -> BaseLlm:
     if spec.provider == "claude-code":
-        # Se autentica con la suscripción del contenedor (CLAUDE_CODE_OAUTH_TOKEN), no con
-        # la credencial del usuario. «default» deja elegir el modelo al propio CLI.
-        return SharedClaudeCodeLlm(**({"model": spec.model} if spec.model != "default" else {}))
+        # Cada persona usa su propia suscripción: el token llega en la petición y solo se
+        # pasa al proceso del CLI de este run. Nunca hay un token común ni se lee del entorno.
+        if spec.apiKey is None or not spec.apiKey.get_secret_value():
+            raise MissingAccount("Vincula tu cuenta de Anthropic en Ajustes para usar Claude Code.")
+        options: dict[str, object] = {"oauth_token": spec.apiKey}
+        if spec.model != "default":
+            options["model"] = spec.model
+        if spec.timeoutS is not None:
+            options["timeout"] = spec.timeoutS
+        if spec.maxConcurrency is not None:
+            options["max_concurrency"] = spec.maxConcurrency
+        return SharedClaudeCodeLlm(**options)
+
+    if spec.provider == "chatgpt":
+        # Plan de ChatGPT del usuario: el BFF manda un token de acceso vigente (lo refresca él).
+        if spec.apiKey is None or not spec.apiKey.get_secret_value():
+            raise MissingAccount("Vincula tu cuenta de ChatGPT en Ajustes para usar ese modelo.")
+        return ChatGptPlanLlm(model=spec.model, access_token=spec.apiKey.get_secret_value(), session_id=session_id)
 
     api_key = spec.apiKey.get_secret_value() if spec.apiKey else ""
 

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { mayUseClaudeCode } from "@/lib/access";
 import { getCurrentUser } from "@/lib/auth";
 import { isBackendAvailable } from "@/lib/agents/registry";
 import { sandboxAvailable } from "@/lib/sandbox/client";
@@ -12,7 +13,8 @@ export async function GET() {
   return NextResponse.json({
     agents: isBackendAvailable(),
     computer: sandboxAvailable(),
+    bots: sandboxAvailable(),
     /** Esta persona puede elegir Claude Code (admin o con permiso concedido). */
-    claudeCode: user.role === "admin" || user.canUseClaudeCode,
+    claudeCode: mayUseClaudeCode(user),
   });
 }

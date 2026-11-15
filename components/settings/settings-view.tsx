@@ -6,15 +6,19 @@ import { ExternalLink, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useShell, type SettingsSection } from "@/components/shell/shell-context";
+import { isAdminRole } from "@/lib/access";
 import { matchesSettings } from "@/lib/settings-search";
 import { cn } from "@/lib/utils";
 import { SETTINGS_ITEMS, SETTINGS_LINKS } from "./sections";
 import { AccountSection } from "./sections/account-section";
+import { AssistantSection } from "./sections/assistant-section";
+import { ClaudeCodeSection } from "./sections/claude-code-section";
 import { ConnectorsSection } from "./sections/connectors-section";
 import { ModelsSection } from "./sections/models-section";
+import { SubscriptionsSection } from "./sections/subscriptions-section";
 import { PreferencesSection } from "./sections/preferences-section";
 import { UsageSection } from "./sections/usage-section";
-import { UsersSection } from "./sections/users-section";
+import { SearchSection } from "./sections/search-section";
 
 const NAV_BTN =
   "flex h-9 w-full items-center gap-2.5 rounded-lg px-3 text-[15px] transition-colors [&_svg]:size-[18px]";
@@ -34,11 +38,22 @@ export function SettingsView({
 }) {
   const [query, setQuery] = useState("");
   const { user } = useShell();
-  const isAdmin = user.role === "admin";
-  const allowed = SETTINGS_ITEMS.filter((i) => !i.adminOnly || isAdmin);
+  const isSuperadmin = user.role === "superadmin";
+  const isAdmin = isAdminRole(user.role);
+  const allowed = SETTINGS_ITEMS.filter(
+    (i) =>
+      (!i.adminOnly || isAdmin) &&
+      (!i.superadminOnly || isSuperadmin) &&
+      (!i.permission || user.permissions[i.permission]),
+  );
   const items = allowed.filter((i) => matchesSettings(query, i.label, i.keywords));
-  const links = SETTINGS_LINKS.filter((l) => matchesSettings(query, l.label, l.keywords));
-  const groups = (["Cuenta", "Agentes", "Administración"] as const)
+  const links = SETTINGS_LINKS.filter(
+    (l) =>
+      (!l.permission || user.permissions[l.permission]) &&
+      (!l.adminOnly || isAdmin) &&
+      matchesSettings(query, l.label, l.keywords),
+  );
+  const groups = (["Cuenta", "Herramientas", "Administración"] as const)
     .map((group) => ({ group, items: items.filter((i) => i.group === group) }))
     .filter((g) => g.items.length > 0);
 
@@ -117,9 +132,12 @@ export function SettingsView({
         {section === "account" ? <AccountSection /> : null}
         {section === "preferences" ? <PreferencesSection /> : null}
         {section === "models" ? <ModelsSection /> : null}
-        {section === "connectors" ? <ConnectorsSection /> : null}
+        {section === "subscriptions" ? <SubscriptionsSection /> : null}
+        {section === "connectors" && user.permissions.connectors ? <ConnectorsSection /> : null}
         {section === "usage" ? <UsageSection /> : null}
-        {section === "users" && isAdmin ? <UsersSection /> : null}
+        {section === "search" && isAdmin ? <SearchSection /> : null}
+        {section === "assistant" && isSuperadmin ? <AssistantSection /> : null}
+        {section === "claudeCode" && isSuperadmin ? <ClaudeCodeSection /> : null}
       </div>
     </div>
   );

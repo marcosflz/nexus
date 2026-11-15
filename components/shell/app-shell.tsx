@@ -9,9 +9,12 @@ import { SettingsDialog } from "@/components/settings/settings-dialog";
 import { AppSidebar } from "./app-sidebar";
 import { ShellDialogs, type ProjectDialogState } from "./dialogs";
 import { SearchDialog } from "./search-dialog";
-import { ShellContext, type SettingsSection, type ShellContextValue } from "./shell-context";
+import { ShellContext, type SettingsSection, type ShellContextValue, type ShellUser } from "./shell-context";
 
-const SECTIONS: SettingsSection[] = ["account", "preferences", "models", "connectors", "usage", "users"];
+const RUNNING_POLL_MS = 3000;
+const UNREAD_KEY = "nexus:unread-threads";
+
+const SECTIONS: SettingsSection[] = ["account", "preferences", "models", "subscriptions", "connectors", "usage", "search", "assistant", "claudeCode"];
 
 function sectionFromHash(hash: string): SettingsSection | null {
   if (!hash.startsWith("#settings")) return null;
@@ -26,7 +29,7 @@ export function AppShell({
   sidebarOpen,
   children,
 }: {
-  user: { id: string; email: string; role: "admin" | "user" };
+  user: ShellUser;
   initialThreads: ThreadSummary[];
   initialProjects: ProjectSummary[];
   sidebarOpen: boolean;
@@ -40,6 +43,9 @@ export function AppShell({
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [newChatSignal, setNewChatSignal] = useState(0);
   const [unread, setUnread] = useState(0);
+  /** Hilos que este navegador está siguiendo en directo (antes de que la lista del servidor lo sepa). */
+  const [localRunning, setLocalRunning] = useState<string[]>([]);
+  const [unreadThreadIds, setUnreadThreadIds] = useState<string[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [settings, setSettings] = useState<{ open: boolean; section: SettingsSection; notice?: string }>({
     open: false,
@@ -67,6 +73,74 @@ export function AppShell({
       // Sin red: se conserva la lista actual.
     }
   }, []);
+
+  const runningThreadIds = useMemo(() => {
+    const ids = new Set(localRunning);
+    for (const thread of threads) if (thread.running) ids.add(thread.id);
+    return [...ids];
+  }, [localRunning, threads]);
+
+  const setThreadRunning = useCallback(
+    (id: string, running: boolean) => {
+      if (running) {
+        setLocalRunning((prev) => (prev.includes(id) ? prev : [...prev, id]));
+        return;
+      }
+      // Se suelta cuando la lista ya refleja lo que hace el servidor: si el run sigue
+      // (la persona se fue a otro chat), el indicador no parpadea.
+      void refreshThreads().finally(() => setLocalRunning((prev) => prev.filter((x) => x !== id)));
+    },
+    [refreshThreads],
+  );
+
+  // Mientras algo se esté generando, la lista se refresca para saber cuándo termina.
+  const anyRunning = runningThreadIds.length > 0;
+  useEffect(() => {
+    if (!anyRunning) return;
+    const timer = window.setInterval(() => void refreshThreads(), RUNNING_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [anyRunning, refreshThreads]);
+
+  // Un hilo que termina mientras no se está mirando queda marcado como «respondido».
+  const previousRunning = useRef<Set<string>>(new Set(initialThreads.filter((t) => t.running).map((t) => t.id)));
+  useEffect(() => {
+    const now = new Set(runningThreadIds);
+    const finished = [...previousRunning.current].filter(
+      (id) => !now.has(id) && !(pathRef.current === "/" && currentRef.current === id),
+    );
+    previousRunning.current = now;
+    setUnreadThreadIds((prev) => {
+      const next = prev.filter((id) => !now.has(id));
+      for (const id of finished) if (!next.includes(id)) next.push(id);
+      return next.length === prev.length && next.every((id, i) => id === prev[i]) ? prev : next;
+    });
+  }, [runningThreadIds]);
+
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(UNREAD_KEY) ?? "[]") as unknown;
+      if (Array.isArray(stored)) {
+        const ids = stored.filter((id): id is string => typeof id === "string");
+        setUnreadThreadIds((prev) => [...new Set([...ids, ...prev])]);
+      }
+    } catch {
+      // Sin almacenamiento local, los avisos duran lo que la pestaña.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(UNREAD_KEY, JSON.stringify(unreadThreadIds));
+    } catch {
+      // Ídem.
+    }
+  }, [unreadThreadIds]);
+
+  // Abrir el hilo es haberlo leído.
+  useEffect(() => {
+    if (pathname !== "/" || !currentThreadId) return;
+    setUnreadThreadIds((prev) => (prev.includes(currentThreadId) ? prev.filter((id) => id !== currentThreadId) : prev));
+  }, [pathname, currentThreadId]);
 
   const navigateHome = useCallback(
     (href: string) => {
@@ -271,6 +345,9 @@ export function AppShell({
       activeProjectId,
       newChatSignal,
       unread,
+      runningThreadIds,
+      unreadThreadIds,
+      setThreadRunning,
       selectThread,
       newChat,
       refreshThreads,
@@ -292,6 +369,9 @@ export function AppShell({
       activeProjectId,
       newChatSignal,
       unread,
+      runningThreadIds,
+      unreadThreadIds,
+      setThreadRunning,
       selectThread,
       newChat,
       refreshThreads,

@@ -18,7 +18,9 @@ export async function POST(req: Request) {
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Petición no válida" }, { status: 400 });
 
-  const scope = { userId: auth.run.userId, agentId: auth.run.agentId };
+  const settings = auth.run.runtimeSnapshot?.spec.memory;
+  if (!settings?.enabled || auth.run.runtimeSnapshot?.testId) return Response.json({ error: "Memoria no habilitada en esta ejecución" }, { status: 403 });
+  const scope = { userId: auth.run.userId, botId: settings.scope === "user" ? null : auth.run.botId };
   const body = parsed.data;
 
   if (body.op === "remember") {

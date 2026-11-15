@@ -46,6 +46,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       attachments: messages.attachments,
       usage: messages.usage,
       parts: messages.parts,
+      reasoning: messages.reasoning,
       followups: messages.followups,
       runId: messages.runId,
       rating: messageFeedback.rating,

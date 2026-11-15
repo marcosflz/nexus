@@ -139,7 +139,7 @@ async def test_destroy_keeps_the_volume_unless_purged():
 
 
 async def test_reaper_stops_only_idle_workspaces():
-    fake, manager = make_manager(SandboxConfig(idle_minutes=10))
+    _fake, manager = make_manager(SandboxConfig(idle_minutes=10))
     await manager.ensure(AGENT)
     await manager.ensure(OTHER)
     now = time.monotonic()

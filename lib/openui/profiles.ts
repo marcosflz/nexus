@@ -90,8 +90,11 @@ export function profileFor(context: {
   focus?: string | null;
   mode?: string | null;
   userToggle?: boolean;
+  /** Perfil de la instancia cuando la UI se ofrece en todos los turnos. */
+  autoProfile?: OpenUiProfile | null;
 }): OpenUiProfile {
   if (context.userToggle) return "full";
+  if (context.autoProfile) return context.autoProfile;
   if (context.mode === "research" || context.focus === "finance") return "data";
   return "minimal";
 }

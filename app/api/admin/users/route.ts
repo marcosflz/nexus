@@ -9,14 +9,14 @@ const createSchema = z.object({
   email: z.string().regex(/^[^@\s]+@[^@\s]+\.[^@\s]+$/),
   /** Si falta, se genera una y se devuelve una sola vez. */
   password: z.string().min(8).max(200).optional(),
-  role: z.enum(["admin", "user"]).default("user"),
+  role: z.enum(["superadmin", "admin", "user"]).default("user"),
   canUseClaudeCode: z.boolean().default(false),
 });
 
 export async function GET() {
   const auth = await requireAdmin();
   if ("response" in auth) return auth.response;
-  return NextResponse.json({ users: await listUsers(), currentUserId: auth.user.id });
+  return NextResponse.json({ users: await listUsers(), currentUserId: auth.user.id, actorRole: auth.user.role });
 }
 
 export async function POST(req: NextRequest) {
@@ -31,8 +31,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (auth.user.role !== "superadmin" && parsed.data.role !== "user") {
+    return NextResponse.json({ error: "Solo un superadmin puede nombrar administradores" }, { status: 403 });
+  }
+
   const password = parsed.data.password ?? generatePassword();
-  const result = await createUser({
+  const result = await createUser(auth.user, {
     email: parsed.data.email.toLowerCase().trim(),
     password,
     role: parsed.data.role,

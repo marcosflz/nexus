@@ -19,6 +19,8 @@ export const NEXUS_POLICY = "nexus.policy";
 
 /** Preguntas de seguimiento propuestas por el agente. `value: { questions }`. */
 export const NEXUS_FOLLOWUPS = "nexus.followups";
+/** Fragmento del razonamiento que publica el modelo: `{ delta }`. No forma parte de la respuesta. */
+export const NEXUS_REASONING = "nexus.reasoning";
 
 /** Id del mensaje del asistente ya persistido. `value: { messageId }`. */
 export const NEXUS_MESSAGE = "nexus.message";

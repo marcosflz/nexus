@@ -1,0 +1,134 @@
+{
+  "$defs": {
+    "SkillManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "license": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "License"
+        },
+        "compatibility": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compatibility"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Metadata",
+          "type": "object"
+        },
+        "allowedTools": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowedtools"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "title": "SkillManifest",
+      "type": "object"
+    },
+    "SkillPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "manifest": {
+          "$ref": "#/$defs/SkillManifest"
+        },
+        "instructions": {
+          "title": "Instructions",
+          "type": "string"
+        },
+        "files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Files",
+          "type": "object"
+        },
+        "digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest",
+        "instructions",
+        "files",
+        "digest"
+      ],
+      "title": "SkillPackage",
+      "type": "object"
+    },
+    "SkillRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "digest"
+      ],
+      "title": "SkillRef",
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/SkillPackage"
+}

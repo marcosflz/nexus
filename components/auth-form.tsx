@@ -27,7 +27,7 @@ const COPY = {
   },
   register: {
     title: "Crea la cuenta de administrador",
-    description: "Es la primera cuenta de esta instalación. Desde ella podrás crear las de los demás.",
+    description: "Es la primera cuenta de esta instalación (superadmin). Desde ella podrás crear las de los demás.",
     endpoint: "/api/auth/register",
     submit: "Crear cuenta",
     busy: "Creando…",

@@ -24,8 +24,8 @@ export interface ActionRequest {
   runId: string;
   threadId: string;
   userId: string;
-  /** Quién provocó la acción: una persona o una rutina programada. */
-  initiator: "user" | "routine";
+  /** Quién provocó la acción: una persona, una rutina programada o un turno de sala de NexBots. */
+  initiator: "user" | "routine" | "room";
   /** Hay una persona conduciendo el navegador en este momento. */
   humanInControl?: boolean;
 }

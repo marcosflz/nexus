@@ -12,12 +12,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { AGENT_TOOL_IDS, type AgentSpec } from "@/lib/agents/spec";
-import { PROVIDERS } from "@/lib/providers";
 import { KnowledgePanel } from "./knowledge-panel";
 import { TriggersPanel } from "./triggers-panel";
 
@@ -78,7 +77,7 @@ export function AgentEditor({
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [versions, setVersions] = useState<{ id: string; version: number; createdAt: string }[]>([]);
   const [computerAvailable, setComputerAvailable] = useState(false);
-  const [claudeCodeAllowed, setClaudeCodeAllowed] = useState(false);
+  const [modelGroups, setModelGroups] = useState<{ provider: string; label: string; models: { id: string; label: string }[] }[]>([]);
   const [humanControl, setHumanControl] = useState(false);
 
   const patch = useCallback((changes: Partial<AgentSpec>) => setSpec((prev) => ({ ...prev, ...changes })), []);
@@ -90,10 +89,12 @@ export function AgentEditor({
       .catch(() => {});
     fetch("/api/capabilities")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { computer?: boolean; claudeCode?: boolean } | null) => {
-        setComputerAvailable(Boolean(data?.computer));
-        setClaudeCodeAllowed(Boolean(data?.claudeCode));
-      })
+      .then((data: { computer?: boolean } | null) => setComputerAvailable(Boolean(data?.computer)))
+      .catch(() => {});
+    // Solo se ofrecen los modelos que el usuario tiene activos en Ajustes.
+    fetch("/api/models")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { groups?: typeof modelGroups } | null) => setModelGroups(data?.groups ?? []))
       .catch(() => {});
     if (agentId) {
       fetch(`/api/agents/${agentId}/computer`)
@@ -387,28 +388,40 @@ export function AgentEditor({
         ) : null}
 
         <TabsContent value="modelo" className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Proveedor" hint="Usa la credencial que ya guardaste para ese proveedor en Ajustes.">
-              <Select
-                value={spec.model.provider ?? "__default"}
-                disabled={readOnly}
-                onValueChange={(v) => patch({ model: { ...spec.model, provider: v === "__default" ? undefined : v } })}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__default">El predeterminado de mi cuenta</SelectItem>
-                  {PROVIDERS.filter(
-                    (item) => !item.requires || claudeCodeAllowed || item.id === spec.model.provider,
-                  ).map((provider) => (
-                    <SelectItem key={provider.id} value={provider.id}>{provider.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="Modelo" hint="Vacío = el de la cuenta.">
-              <Input value={spec.model.model ?? ""} disabled={readOnly} onChange={(e) => patch({ model: { ...spec.model, model: e.target.value || undefined } })} />
-            </Field>
-          </div>
+          <Field
+            label="Modelo"
+            hint="«El que elija en el chat» usa el modelo del selector del chat (o tu predeterminado). Los modelos se activan en Ajustes → Claves de API y Suscripciones."
+          >
+            <Select
+              value={spec.model.provider && spec.model.model ? `${spec.model.provider}\u0000${spec.model.model}` : "__chat"}
+              disabled={readOnly}
+              onValueChange={(v) => {
+                if (v === "__chat") return patch({ model: {} });
+                const [provider, model] = v.split("\u0000");
+                patch({ model: { provider, model } });
+              }}
+            >
+              <SelectTrigger className="sm:w-96"><SelectValue /></SelectTrigger>
+              <SelectContent className="max-h-80">
+                <SelectItem value="__chat">El que elija en el chat</SelectItem>
+                {spec.model.provider &&
+                spec.model.model &&
+                !modelGroups.some((g) => g.provider === spec.model.provider && g.models.some((m) => m.id === spec.model.model)) ? (
+                  <SelectItem value={`${spec.model.provider}\u0000${spec.model.model}`}>
+                    {spec.model.model} (actual, no activo)
+                  </SelectItem>
+                ) : null}
+                {modelGroups.map((group) => (
+                  <SelectGroup key={group.provider}>
+                    <SelectLabel>{group.label}</SelectLabel>
+                    {group.models.map((m) => (
+                      <SelectItem key={m.id} value={`${group.provider}\u0000${m.id}`}>{m.label}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
           <h3 className="pt-2 text-sm font-medium">Límites (0 = sin límite)</h3>
           <div className="grid gap-4 sm:grid-cols-2">
             {(

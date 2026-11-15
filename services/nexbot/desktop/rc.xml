@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Gestor de ventanas del escritorio del bot: solo foco. Sin menús ni atajos que lancen programas. -->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <focus><focusNew>yes</focusNew><followMouse>no</followMouse></focus>
+  <desktops><number>1</number></desktops>
+  <keyboard></keyboard>
+  <!-- Sin contexto «Frame»: también cubre el interior de la ventana y se comería cada clic. -->
+  <mouse>
+    <context name="Client">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+    </context>
+  </mouse>
+</openbox_config>

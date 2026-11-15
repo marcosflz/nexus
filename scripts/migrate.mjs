@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Migraciones idempotentes del MVP (DDL crudo, sin drizzle-kit).
 import postgres from "postgres";
+import { migrateSkills } from "./skills-migration.mjs";
 
 const url =
   process.env.DATABASE_URL ?? "postgres://plexo:plexo@localhost:5432/plexo";
@@ -187,6 +188,12 @@ try {
         ALTER TABLE credentials ADD CONSTRAINT credentials_user_provider_idx UNIQUE (user_id, provider);
       END IF;
     END $$`;
+
+  // Varios proveedores activos a la vez, cada uno con su lista de modelos visibles.
+  // `model` queda como el modelo predeterminado del proveedor.
+  await sql`ALTER TABLE credentials ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true`;
+  await sql`ALTER TABLE credentials ADD COLUMN IF NOT EXISTS models jsonb`;
+  await sql`UPDATE credentials SET models = jsonb_build_array(model) WHERE models IS NULL AND model <> ''`;
 
   // --- Fases 5 a 8: agentes, conocimiento, autonomía y compartir ------------
 
@@ -384,21 +391,199 @@ try {
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS can_use_claude_code boolean NOT NULL DEFAULT false`;
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at timestamptz`;
 
-  // NEXUS_ADMIN_EMAILS: cuentas que son admin en cada arranque (así se recupera el acceso).
-  const adminEmails = (process.env.NEXUS_ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
+  // Control por cuenta (permisos, modelos, cupo) y configuración de la instancia.
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS access jsonb NOT NULL DEFAULT '{}'::jsonb`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS instance_settings (
+      key text PRIMARY KEY,
+      value jsonb NOT NULL,
+      updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )`;
+
+  // Cuentas con rol fijado por entorno en cada arranque (así se recupera el acceso).
+  // NEXUS_ADMIN_EMAILS solo asciende: nunca rebaja a un superadmin.
+  const emailsFrom = (name) =>
+    (process.env[name] ?? "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean);
+  const superadminEmails = emailsFrom("NEXUS_SUPERADMIN_EMAILS");
+  if (superadminEmails.length > 0) {
+    await sql`UPDATE users SET role = 'superadmin' WHERE lower(email) IN ${sql(superadminEmails)}`;
+  }
+  const adminEmails = emailsFrom("NEXUS_ADMIN_EMAILS");
   if (adminEmails.length > 0) {
-    await sql`UPDATE users SET role = 'admin' WHERE lower(email) IN ${sql(adminEmails)}`;
+    await sql`UPDATE users SET role = 'admin' WHERE lower(email) IN ${sql(adminEmails)} AND role = 'user'`;
   }
-  const [{ total, admins }] = await sql`
+  // Instalaciones anteriores al rol: el admin más antiguo pasa a superadmin.
+  await sql`
+    UPDATE users SET role = 'superadmin'
+    WHERE id = (SELECT id FROM users WHERE role = 'admin' AND disabled_at IS NULL ORDER BY created_at LIMIT 1)
+      AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'superadmin' AND disabled_at IS NULL)`;
+  const [{ total, superadmins }] = await sql`
     SELECT count(*)::int AS total,
-           count(*) FILTER (WHERE role = 'admin' AND disabled_at IS NULL)::int AS admins
+           count(*) FILTER (WHERE role = 'superadmin' AND disabled_at IS NULL)::int AS superadmins
     FROM users`;
-  if (total > 0 && admins === 0) {
-    console.warn("[nexus] AVISO: no hay ningún admin activo. Define NEXUS_ADMIN_EMAILS con el correo de una cuenta.");
+  if (total > 0 && superadmins === 0) {
+    console.warn("[nexus] AVISO: no hay ningún superadmin activo. Define NEXUS_SUPERADMIN_EMAILS con el correo de una cuenta.");
   }
+
+  // NexBots: identidad y configuración. El entorno lo gestiona sandboxd.
+  await sql`
+    CREATE TABLE IF NOT EXISTS bots (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      owner_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      slug text NOT NULL,
+      name text NOT NULL,
+      avatar text NOT NULL DEFAULT '',
+      description text NOT NULL DEFAULT '',
+      instructions text NOT NULL DEFAULT '',
+      config jsonb NOT NULL DEFAULT '{}'::jsonb,
+      desired_state text NOT NULL DEFAULT 'stopped',
+      status text NOT NULL DEFAULT 'stopped',
+      last_error text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT bots_owner_slug UNIQUE (owner_id, slug)
+    )`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS bot_agents (
+      bot_id uuid NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+      agent_id uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      is_default boolean NOT NULL DEFAULT false,
+      PRIMARY KEY (bot_id, agent_id)
+    )`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS bot_tasks (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      bot_id uuid NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind text NOT NULL,
+      status text NOT NULL DEFAULT 'queued',
+      input jsonb NOT NULL DEFAULT '{}'::jsonb,
+      result jsonb,
+      artifacts jsonb NOT NULL DEFAULT '[]'::jsonb,
+      error text,
+      run_id uuid,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      finished_at timestamptz
+    )`;
+  await sql`CREATE INDEX IF NOT EXISTS bot_tasks_bot_created_idx ON bot_tasks (bot_id, created_at DESC)`;
+  await sql`ALTER TABLE runs ADD COLUMN IF NOT EXISTS bot_id uuid`;
+
+  // Panel de usuarios: sesiones con origen, notas y registro de acciones de admin.
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_reason text`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_note text`;
+  await sql`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ip text`;
+  await sql`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent text`;
+  await sql`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_seen_at timestamptz`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS admin_audit (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      actor_id uuid REFERENCES users(id) ON DELETE SET NULL,
+      actor_email text NOT NULL,
+      target_id uuid REFERENCES users(id) ON DELETE SET NULL,
+      target_email text,
+      action text NOT NULL,
+      detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )`;
+  await sql`CREATE INDEX IF NOT EXISTS admin_audit_target_idx ON admin_audit (target_id, created_at DESC)`;
+
+  // Salas de NexBots: foro con hilos que son también tarjetas del tablero.
+  await sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS bot_id uuid`;
+  await sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS notice jsonb`;
+  await sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reasoning text`;
+  await sql`ALTER TABLE runs ADD COLUMN IF NOT EXISTS computer boolean NOT NULL DEFAULT false`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS bot_rooms (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      owner_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name text NOT NULL,
+      description text NOT NULL DEFAULT '',
+      limits jsonb NOT NULL DEFAULT '{}'::jsonb,
+      mixed_network_ack boolean NOT NULL DEFAULT false,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS bot_room_members (
+      room_id uuid NOT NULL REFERENCES bot_rooms(id) ON DELETE CASCADE,
+      bot_id uuid NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (room_id, bot_id)
+    )`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS room_topics (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      room_id uuid NOT NULL REFERENCES bot_rooms(id) ON DELETE CASCADE,
+      thread_id uuid NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      title text NOT NULL,
+      status text NOT NULL DEFAULT 'todo',
+      assignee_bot_id uuid REFERENCES bots(id) ON DELETE SET NULL,
+      parent_topic_id uuid,
+      created_by_bot_id uuid,
+      position integer NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )`;
+  await sql`CREATE INDEX IF NOT EXISTS room_topics_room_idx ON room_topics (room_id, updated_at DESC)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS room_topics_thread_idx ON room_topics (thread_id)`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS room_topic_blockers (
+      topic_id uuid NOT NULL REFERENCES room_topics(id) ON DELETE CASCADE,
+      blocked_by_id uuid NOT NULL REFERENCES room_topics(id) ON DELETE CASCADE,
+      PRIMARY KEY (topic_id, blocked_by_id),
+      CHECK (topic_id <> blocked_by_id)
+    )`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS room_turns (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      topic_id uuid NOT NULL REFERENCES room_topics(id) ON DELETE CASCADE,
+      bot_id uuid NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+      round_id uuid NOT NULL,
+      hop integer NOT NULL DEFAULT 0,
+      reason text NOT NULL DEFAULT 'mention',
+      trigger_message_id uuid,
+      parent_run_id uuid,
+      status text NOT NULL DEFAULT 'queued',
+      run_id uuid,
+      error text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )`;
+  // Estos tres índices son la garantía: un turno activo por hilo, un run de sala por bot
+  // y ningún turno duplicado en cola, pase lo que pase en la aplicación.
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS room_turns_one_active_per_topic
+    ON room_turns (topic_id) WHERE status IN ('running', 'awaiting')`;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS room_turns_one_active_per_bot
+    ON room_turns (bot_id) WHERE status IN ('running', 'awaiting')`;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS room_turns_one_queued_per_bot_topic
+    ON room_turns (topic_id, bot_id) WHERE status = 'queued'`;
+  await sql`CREATE INDEX IF NOT EXISTS room_turns_topic_idx ON room_turns (topic_id, created_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS room_turns_run_idx ON room_turns (run_id)`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS room_activity (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      room_id uuid NOT NULL REFERENCES bot_rooms(id) ON DELETE CASCADE,
+      topic_id uuid,
+      actor_user_id uuid,
+      actor_bot_id uuid,
+      run_id uuid,
+      action text NOT NULL,
+      detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )`;
+  await sql`CREATE INDEX IF NOT EXISTS room_activity_room_idx ON room_activity (room_id, created_at DESC)`;
+  // Una tarea de ordenador activa por bot, también a nivel de base de datos.
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS bot_tasks_one_computer_per_bot
+    ON bot_tasks (bot_id) WHERE kind = 'computer' AND status IN ('queued', 'running', 'awaiting_approval')`;
 
   // Un run que quedó `running` cuando el proceso murió nunca terminó: se
   // reconcilia al arrancar en vez de dejar la UI en un spinner eterno.
@@ -407,6 +592,7 @@ try {
     SET status = 'interrupted', lease_until = NULL, updated_at = now()
     WHERE status = 'running' AND (lease_until IS NULL OR lease_until < now())`;
 
+  await migrateSkills(sql);
   console.log("[nexus] migraciones aplicadas");
 } finally {
   await sql.end();

@@ -41,3 +41,6 @@ __pycache__/
 services/sandboxd/.venv/
 services/sandboxd/.pytest_cache/
 services/sandboxd/.ruff_cache/
+services/nexbot/.venv/
+services/nexbot/.pytest_cache/
+services/nexbot/.ruff_cache/

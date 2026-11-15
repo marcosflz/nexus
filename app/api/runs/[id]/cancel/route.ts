@@ -1,3 +1,4 @@
+import { botApi } from "@/lib/bots/client";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
@@ -23,6 +24,8 @@ export async function POST(_req: NextRequest, context: RouteContext) {
   if (run.status !== "running" && run.status !== "awaiting_input") {
     return NextResponse.json({ ok: true, status: run.status });
   }
+
+  if (run.botId && run.runtimeSnapshot?.scripts) await botApi(run.botId, "POST", "skills/cancel", { runId: id });
 
   // Si este proceso lo está ejecutando, el ejecutor registra la cancelación y
   // cierra el log. Si no (run en pausa o huérfano), se cierra aquí directamente.

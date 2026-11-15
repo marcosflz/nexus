@@ -2,14 +2,18 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { approvals, messages, threads } from "@/lib/db/schema";
-import { getCredentialRow } from "@/lib/credentials";
+import { enabledModels, getCredentialRow, listCredentials } from "@/lib/credentials";
+import { mayUseClaudeCode, modelAllowed, remainingTokens } from "@/lib/access";
+import { ensureChatGptToken } from "@/lib/instance/chatgpt";
+import { claudeCodeRuntime } from "@/lib/instance/claude-code";
 import { getProvider } from "@/lib/providers";
-import { getUserAccess } from "@/lib/users";
+import { getUserAccess, tokensThisMonth } from "@/lib/users";
 import { decryptSecret } from "@/lib/crypto";
 import type { AgUiEvent } from "@/lib/agui/events";
 import type { BackendCredential, HistoryMessage, ResumeItem } from "@/lib/agents/backend";
 import { defaultAgentSpec } from "@/lib/agents/spec";
 import { loadAgentVersion } from "@/lib/agents/store";
+import { botConnector, standardBotConnector } from "@/lib/bots/client";
 import { connectorsForRun } from "@/lib/connectors/store";
 import { getBackend } from "@/lib/agents/registry";
 import { getEventsAfter, getRunCheckpoint, getRunMeta, reopenRun } from "./store";
@@ -25,24 +29,89 @@ const fail = (status: number, error: string, code?: string): Launch<never> => ({
 });
 
 /**
- * Credencial del usuario con la clave ya descifrada. Sin `provider`, la
- * predeterminada; con él, la de ese proveedor (un agente puede fijar uno).
+ * Credencial lista para un turno, tras comprobar todo lo que un admin puede
+ * limitar. Es el punto común del chat, las reanudaciones y las rutinas (que corren
+ * sin sesión). Sin `provider`, la predeterminada; con él, la de ese proveedor.
+ * `model` es el que fija el agente, si lo fija: lo que se comprueba es el modelo real.
  */
-export async function loadCredential(userId: string, provider?: string | null): Promise<Launch<BackendCredential>> {
-  // También cubre rutinas y webhooks, que se ejecutan sin una sesión de por medio.
-  const access = await getUserAccess(userId);
-  if (!access || access.disabled) return fail(403, "Esta cuenta está desactivada", "account_disabled");
+export async function loadCredential(
+  userId: string,
+  provider?: string | null,
+  model?: string | null,
+): Promise<Launch<BackendCredential>> {
+  const account = await getUserAccess(userId);
+  if (!account || account.disabled) return fail(403, "Esta cuenta está desactivada", "account_disabled");
 
-  const row = await getCredentialRow(userId, provider);
+  // Sin proveedor: el predeterminado, o el primero activo si el predeterminado está apagado.
+  const row = provider
+    ? await getCredentialRow(userId, provider)
+    : ((await listCredentials(userId)).find((item) => item.enabled) ?? null);
   if (!row) {
     return provider
       ? fail(400, `No has configurado el proveedor ${provider}. Añádelo en Ajustes.`, "no_credential")
       : fail(400, "Configura tu proveedor de modelos en Ajustes", "no_credential");
   }
-  // Se comprueba en cada run: un admin puede haber retirado el permiso.
-  if (getProvider(row.provider)?.requires === "claudeCode" && !access.canUseClaudeCode) {
-    return fail(403, "Ya no tienes permiso para usar Claude Code. Elige otro proveedor en Ajustes.", "no_credential");
+  if (!row.enabled) {
+    return fail(400, `Has desactivado ${getProvider(row.provider)?.label ?? row.provider}. Actívalo en Ajustes.`, "no_credential");
   }
+
+  const info = getProvider(row.provider);
+  if (info?.requires && !mayUseClaudeCode(account)) {
+    return fail(403, `No tienes permiso para usar ${info.label}. Elige otro proveedor en Ajustes.`, "model_not_allowed");
+  }
+  const isClaudeCode = info?.requires === "claudeCode";
+  const effectiveModel = model || row.model || enabledModels(row)[0]?.id || "";
+  if (!effectiveModel) {
+    return fail(400, `Elige qué modelos de ${info?.label ?? row.provider} quieres usar en Ajustes.`, "no_credential");
+  }
+  if (!modelAllowed(account, row.provider, effectiveModel)) {
+    return fail(403, `Tu cuenta no tiene acceso al modelo ${effectiveModel}. Elige otro en Ajustes.`, "model_not_allowed");
+  }
+
+  const remaining = remainingTokens(account, await tokensThisMonth(userId));
+  if (remaining === 0) {
+    return fail(429, "Has agotado tu cupo mensual de tokens. Habla con un administrador.", "token_limit");
+  }
+
+  if (isClaudeCode) {
+    const runtime = await claudeCodeRuntime();
+    if (!runtime.enabled) return fail(503, "Un superadmin ha desactivado Claude Code.", "model_not_allowed");
+    // Solo la cuenta de Anthropic que ha vinculado este usuario: nunca una común.
+    let token: string | null = null;
+    if (row.apiKeyEnc) {
+      try {
+        token = decryptSecret(row.apiKeyEnc);
+      } catch {
+        token = null;
+      }
+    }
+    if (!token) {
+      return fail(400, "Vincula tu cuenta de Claude en Ajustes → Suscripciones.", "no_credential");
+    }
+    return {
+      ok: true,
+      value: {
+        provider: row.provider,
+        model: effectiveModel,
+        apiKey: token,
+        baseUrl: null,
+        remainingTokens: remaining,
+        timeoutS: runtime.timeoutS,
+        maxConcurrency: runtime.maxConcurrency,
+      },
+    };
+  }
+
+  if (info?.requires === "chatgpt") {
+    // Token de acceso vigente del plan del usuario (se renueva solo, bajo bloqueo).
+    const token = await ensureChatGptToken(userId);
+    if (!token.ok) return fail(token.status === 401 ? 400 : token.status, token.error, "no_credential");
+    return {
+      ok: true,
+      value: { provider: row.provider, model: effectiveModel, apiKey: token.accessToken, baseUrl: null, remainingTokens: remaining },
+    };
+  }
+
   let apiKey: string | null = null;
   if (row.apiKeyEnc) {
     try {
@@ -53,7 +122,7 @@ export async function loadCredential(userId: string, provider?: string | null): 
   }
   return {
     ok: true,
-    value: { provider: row.provider, model: row.model, apiKey, baseUrl: row.baseUrl },
+    value: { provider: row.provider, model: effectiveModel, apiKey, baseUrl: row.baseUrl, remainingTokens: remaining },
   };
 }
 
@@ -108,9 +177,10 @@ export async function launchResume(params: {
 
   // El agente y la versión con los que arrancó el run (no la vigente hoy).
   const agent = run.agentId && run.agentVersionId ? await loadAgentVersion(run.agentId, run.agentVersionId) : null;
-  const spec = agent?.spec ?? defaultAgentSpec();
+  const spec = run.runtimeSnapshot?.spec ?? agent?.spec ?? defaultAgentSpec();
+  if (run.agentId && !agent && !run.runtimeSnapshot) return fail(409, "El perfil de Agente se ha retirado");
 
-  const credential = await loadCredential(userId, spec.model.provider);
+  const credential = await loadCredential(userId, spec.model.provider, spec.model.model);
   if (!credential.ok) return credential;
 
   const checkpoint = await getRunCheckpoint(runId);
@@ -134,7 +204,18 @@ export async function launchResume(params: {
       );
   }
 
+  // Un run confinado a su bot (computer use o turno de sala) se reanuda igual de confinado.
+  const room = run.initiator === "room" ? await (await import("@/lib/rooms/engine")).roomResume(run) : null;
+  if (run.initiator === "room" && !room) return fail(409, "El turno de la sala ya no existe");
+  // Un bot llamado desde un chat: run de una persona, con bot y sin ser computer use.
+  const botChat = run.botId && run.initiator === "user" && !run.computer;
+  const chatContext = null;
+  const chatDeps = botChat ? (await import("@/lib/rooms/engine")).botMessageDeps(run.botId!) : undefined;
+  const confined = run.computer || run.initiator === "room";
+
   const existing = await getEventsAfter(runId, 0);
+  // Si el bot ya no está en marcha, el run continúa sin sus herramientas y lo dirá el modelo.
+  const botLink = run.botId ? await (confined ? botConnector(run.botId) : standardBotConnector(run.botId)) : null;
   const resume: ResumeItem[] = entries.map(({ callId, status, payload, reason }) => ({
     callId,
     status,
@@ -149,15 +230,20 @@ export async function launchResume(params: {
       threadId: run.threadId,
       userId,
       initiator: run.initiator,
-      credential: { ...credential.value, model: spec.model.model || credential.value.model },
+      credential: credential.value,
       userText: "",
       agent: { id: agent?.agent.id ?? null, versionId: agent?.versionId ?? null, spec },
       history: await buildHistory(run.threadId),
-      connectors: (await connectorsForRun(userId, agent?.agent.id ?? null, spec)).links,
+      connectors: [
+        ...(confined ? [] : (await connectorsForRun(userId, agent?.agent.id ?? null, spec)).links),
+        ...(botLink ? [botLink] : []),
+      ],
+      computer: run.computer,
+      room: run.runtimeSnapshot?.room ?? room?.room ?? undefined,
       checkpoint,
       resume,
     },
-    undefined,
+    room?.deps ?? chatDeps,
     { events: existing.map((row) => row.payload as AgUiEvent), lastSeq: existing.at(-1)?.seq ?? 0 },
   );
 

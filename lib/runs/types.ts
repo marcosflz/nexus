@@ -21,9 +21,11 @@ export type RunStatus =
  * significa que el proceso murió a mitad del turno.
  */
 
-export type RunInitiator = "user" | "routine" | "trigger";
+/** `room`: turno de un NexBot en una sala; lo provoca una persona o la mención de otro bot. */
+export type RunInitiator = "user" | "routine" | "trigger" | "room";
 
 export interface Run {
+  runtimeSnapshot?: import("@/lib/db/schema").RuntimeSnapshot | null;
   id: string;
   threadId: string;
   userId: string;
@@ -32,6 +34,10 @@ export interface Run {
   backend: string | null;
   agentId: string | null;
   agentVersionId: string | null;
+  botId: string | null;
+  computer: boolean;
+  groupId: string | null;
+  parentRunId: string | null;
   agentSessionId: string | null;
   leaseUntil: Date | null;
   heartbeatAt: Date | null;

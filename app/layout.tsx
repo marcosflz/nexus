@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Source_Serif_4 } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -18,6 +18,21 @@ const serif = Source_Serif_4({
 export const metadata: Metadata = {
   title: "Nexus",
   description: "Buscador con IA open source, autoalojado y con tus propias claves",
+  // «Añadir a pantalla de inicio»: se abre a pantalla completa, sin la barra del navegador.
+  appleWebApp: { capable: true, title: "Nexus", statusBarStyle: "default" },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  // Ocupa también la zona del notch y del indicador de inicio; el relleno va con env(safe-area-*).
+  viewportFit: "cover",
+  // El teclado encoge el área útil, así el compositor queda siempre a la vista.
+  interactiveWidget: "resizes-content",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#fcfcf9" },
+    { media: "(prefers-color-scheme: dark)", color: "#191a1a" },
+  ],
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

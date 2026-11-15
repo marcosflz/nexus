@@ -1,13 +1,16 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { runs } from "@/lib/db/schema";
+import type { RunInitiator } from "@/lib/runs/types";
 import { verifyRunToken, type RunTokenClaims } from "./token";
 
 export interface InternalRun {
+  botId: string | null;
+  runtimeSnapshot: import("@/lib/db/schema").RuntimeSnapshot | null;
   id: string;
   threadId: string;
   userId: string;
-  initiator: "user" | "routine" | "trigger";
+  initiator: RunInitiator;
   agentId: string | null;
 }
 
@@ -40,6 +43,8 @@ export async function authenticateInternal(req: Request): Promise<InternalAuth> 
       userId: runs.userId,
       initiator: runs.initiator,
       agentId: runs.agentId,
+      botId: runs.botId,
+      runtimeSnapshot: runs.runtimeSnapshot,
       status: runs.status,
     })
     .from(runs)
@@ -58,6 +63,8 @@ export async function authenticateInternal(req: Request): Promise<InternalAuth> 
       userId: row.userId,
       initiator: row.initiator as InternalRun["initiator"],
       agentId: row.agentId,
+      botId: row.botId,
+      runtimeSnapshot: row.runtimeSnapshot,
     },
   };
 }

@@ -2,6 +2,7 @@ import {
   EventType,
   LEGACY_SOURCES,
   NEXUS_FOLLOWUPS,
+  NEXUS_REASONING,
   NEXUS_SOURCES,
   type AgUiEvent,
   type NexusFollowupsPayload,
@@ -35,6 +36,9 @@ export interface AgUiState {
   /** Posición de `rawText` en la que arrancó cada herramienta (para ordenar `parts`). */
   toolOffsets: Record<string, number>;
 }
+
+/** Tope de lo que se guarda y se muestra del razonamiento de un turno. */
+export const MAX_REASONING_CHARS = 24_000;
 
 export function initialAgUiState(
   messageId: string,
@@ -217,6 +221,17 @@ export function reduceAgUi(state: AgUiState, event: AgUiEvent): AgUiState {
     }
 
     case EventType.CUSTOM: {
+      if (event.name === "nexus.skill") {
+        const value = event.value as { id: string; name?: string };
+        const name = value.name ?? value.id;
+        if (state.toolCalls.some((tool) => tool.name === "activate_skill" && [value.id, name].includes((tool.input as { skill?: string } | undefined)?.skill ?? ""))) return state;
+        return rebuild(withTool(state, { id: `skill-${value.id}`, name: "activate_skill", input: { skill: name }, status: "complete", result: `Skill activada: ${name}` }));
+      }
+      if (event.name === NEXUS_REASONING) {
+        const delta = (event.value as { delta?: unknown } | undefined)?.delta;
+        if (typeof delta !== "string" || !delta) return state;
+        return rebuild(state, { reasoning: ((state.message.reasoning ?? "") + delta).slice(0, MAX_REASONING_CHARS) });
+      }
       if (event.name === NEXUS_FOLLOWUPS) {
         const payload = event.value as NexusFollowupsPayload | undefined;
         const questions = (payload?.questions ?? []).filter((q) => typeof q === "string" && q.trim());

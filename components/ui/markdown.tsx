@@ -1,11 +1,12 @@
 import { cn } from "@/lib/utils"
 import { marked } from "marked"
 import { memo, useId, useMemo } from "react"
-import ReactMarkdown, { Components } from "react-markdown"
+import ReactMarkdown, { Components, type Options } from "react-markdown"
 import remarkBreaks from "remark-breaks"
 import remarkGfm from "remark-gfm"
-import type { PluggableList } from "unified"
 import { CodeBlock, CodeBlockCode } from "./code-block"
+
+type PluggableList = NonNullable<Options["remarkPlugins"]>
 
 export type MarkdownProps = {
   children: string

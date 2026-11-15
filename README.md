@@ -15,12 +15,15 @@
 
 - El modelo puede responder con tarjetas, tablas, gráficos o mapas (OpenUI) y **pedirte datos con un formulario**: el turno se pausa, tú lo rellenas y continúa con tus valores.
 
-**Agentes personalizados y autónomos**
+**Skills y Nexbots**
 
-- Cada agente tiene nombre, instrucciones, herramientas, modelo, conocimiento (tus documentos, con búsqueda de texto completo y citas), memoria y límites de gasto. Se versionan: cada cambio es una versión nueva y las ejecuciones fijan la suya.
-- `@nombre` en un mensaje o el selector del chat los activan. Los públicos aparecen en una galería compartida.
-- **Trabajan solos**: tareas programadas (cron con zona horaria), webhooks entrantes, vigilancia de feeds RSS y de páginas, y encadenado (un agente arranca cuando otro termina). Lo que hacen aparece en la **bandeja**; toda acción con efectos pide tu **aprobación**.
-- Conectores **MCP** (con secretos cifrados) y, opcionalmente, un **navegador aislado por agente**.
+- Biblioteca de skills compatibles con Agent Skills: importación desde GitHub público o ZIP, referencias, recursos, versiones y galería interna con copias privadas.
+- Creador por chat con borradores persistentes, edición de archivos, pruebas y publicación explícita.
+- Activación automática, selector de skills y `/nombre-skill` en el chat. Los Nexbots utilizan las skills que se les asignan.
+- Cada Nexbot reúne identidad, rol, instrucciones, modelo, herramientas, conectores, memoria, conocimiento, límites y rutinas. Su ordenador es opcional.
+- Los scripts requieren un Nexbot con entorno aislado y aprobación. El harness y el formato se centralizan en nas-adk 0.5.0; Nexus aporta biblioteca, permisos e interfaz.
+
+Uso, arquitectura, transición desde Agentes y pruebas reproducibles: [Skills y Nexbots](docs/skills.md).
 
 ## Estado
 
@@ -29,10 +32,12 @@
 | Búsqueda, citas, hilos, adjuntos, Research, compartir, edición, valoración | ✅ |
 | Runs duraderos y reanudables (AG-UI), pausa/reanudación, cancelación | ✅ |
 | Motor nas-adk (sidecar) con herramientas propias de la app | ✅ |
-| Agentes: versiones, conocimiento, memoria, galería, `@mención`, presupuestos | ✅ |
+| Skills: biblioteca, importación, creador, versiones, galería y carga progresiva | ✅ |
+| Nexbots: configuración propia, ordenador opcional, conocimiento, memoria y rutinas | ✅ |
 | Autonomía: cron, webhook, RSS, vigilancia, encadenado, bandeja, aprobaciones | ✅ |
 | Conectores MCP | 🟡 alta, validación de URL y cifrado probados de extremo a extremo; la conexión MCP con cabeceras está probada con *mocks* en nas-adk, **no** contra un servidor MCP real |
 | Ordenador por agente (navegador aislado) | 🟡 desplegable con `--profile computer`; la especificación del contenedor está validada contra Docker real, **no** se ha probado con la imagen de Playwright ni hay vista en vivo |
+| NexBots: bots con contenedor, volumen y red propios ([docs](docs/nexbots.md)) | 🟡 Interfaz y recorrido de skills probados con Docker real y un modelo simulado; pendiente evaluación con un modelo real |
 | Embeddings / pgvector, Model Council, ramas de conversación | ❌ no implementados |
 
 ## Arquitectura
@@ -77,7 +82,7 @@ git clone <url-de-nas-adk> ../nas-adk        # o define NAS_ADK_PATH en .env
 # 3. Levanta todo (app + sidecar + Postgres + SearXNG)
 docker compose up -d --build
 
-# 4. Abre http://localhost:3000, crea la cuenta de administrador y guarda tu API key en Ajustes
+# 4. Abre http://localhost:3000, crea la cuenta de superadmin y guarda tu API key en Ajustes
 ```
 
 Puertos por defecto: app `3000` (`APP_PORT=3010 docker compose up -d` para cambiarlo, o ponlo en `.env`), Postgres `127.0.0.1:5433`, SearXNG `127.0.0.1:8888`. El sidecar solo es accesible desde la red de Compose.
@@ -102,11 +107,11 @@ Requisitos: Node 20+, Docker, `uv` y el repositorio de nas-adk (para el sidecar,
 
 ```bash
 docker compose up -d db searxng           # Postgres en :5433, SearXNG en :8888
-npm install
+pnpm install
 export APP_ENCRYPTION_KEY=$(openssl rand -hex 32)
 export DATABASE_URL=postgres://plexo:plexo@localhost:5433/plexo
-npm run migrate
-npm run dev                               # http://localhost:3000
+pnpm run migrate
+pnpm run dev                               # http://localhost:3000
 
 # Sidecar de agentes (obligatorio: ejecuta todos los turnos)
 cd services/agent && uv sync --extra dev
@@ -115,7 +120,7 @@ NEXUS_AGENT_SECRET=dev SEARXNG_URL=http://localhost:8888 \
 # y en la app:  NEXUS_AGENT_URL=http://127.0.0.1:8090 NEXUS_AGENT_SECRET=dev NEXUS_INTERNAL_URL=http://127.0.0.1:3000
 ```
 
-Tests: `npm test` · `npm run typecheck` · `npm run build` · `cd services/agent && .venv/bin/python -m pytest` · `cd services/sandboxd && .venv/bin/python -m pytest`.
+Tests: `pnpm test` · `pnpm run typecheck` · `pnpm run build` · `cd services/agent && .venv/bin/python -m pytest` · `cd services/sandboxd && .venv/bin/python -m pytest`.
 
 ## Variables de entorno
 
@@ -125,8 +130,7 @@ Tests: `npm test` · `npm run typecheck` · `npm run build` · `cd services/agen
 | `NEXUS_AGENT_SECRET` | **Obligatoria.** Secreto compartido app ⇄ sidecar. Sin él no se pueden ejecutar turnos. |
 | `NEXUS_AGENT_URL` / `NEXUS_INTERNAL_URL` | URL del sidecar / URL con la que el sidecar vuelve al BFF. |
 | `NEXUS_AGENT_CONTEXT_TOKENS` | Contexto máximo por llamada al modelo en el sidecar (64000). |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Activa el proveedor «Claude Code (suscripción)»; se genera con `claude setup-token`. Los admins deciden quién puede usarlo. |
-| `NEXUS_ADMIN_EMAILS` | Correos que son admin en cada arranque (recuperación de acceso). |
+| `NEXUS_SUPERADMIN_EMAILS` / `NEXUS_ADMIN_EMAILS` | Correos que reciben ese rol en cada arranque (recuperación de acceso). |
 | `NEXUS_MAX_CONCURRENT_RUNS` | Runs simultáneos (4). Los trabajos sobrantes esperan en cola. |
 | `NEXUS_WORKER` | `off` desactiva el planificador (cron, RSS, cola de trabajos). |
 | `NEXUS_ALLOW_PRIVATE_CONNECTORS` | Permite conectores MCP en red privada o `http`. **Desactivado por defecto** (evita SSRF). |
@@ -142,11 +146,15 @@ Las variables `PLEXO_*` (nombre anterior) siguen funcionando como alias.
 app/                    # páginas (chat, agentes, bandeja, uso, ajustes, /s/<enlace>) y API routes
   api/chat              # crea el run (o lo reanuda) y devuelve su SSE
   api/runs/[id]/*       # eventos reanudables por seq y cancelación
-  api/agents/*          # CRUD, versiones, conocimiento, disparadores, ejecutar ahora
+  api/skills/*          # biblioteca, importación, versiones y galería
+  api/skill-drafts/*    # creador, archivos y pruebas
+  api/bots/*            # configuración propia, skills, conocimiento, memoria y rutinas
   api/internal/*        # callbacks del sidecar (política, conocimiento, memoria, OpenUI)
   api/hooks/*           # webhooks públicos
 components/             # chat (assistant-ui), agentes, bandeja, ui/ (shadcn + prompt-kit)
-lib/agents/             # interfaz AgentBackend, motores, spec, versiones, presupuestos
+lib/runtime/            # configuración común y snapshots de ejecución
+lib/skills/             # contratos generados, biblioteca y adaptadores de nas-adk
+lib/agents/             # contrato del backend y compatibilidad histórica
 lib/agui/               # eventos AG-UI, reducer puro y cliente SSE con reconexión
 lib/runs/               # ejecutor, bus, tail SSE, store, rutinas
 lib/worker/ lib/triggers/  # cola de trabajos (SKIP LOCKED), cron, RSS, vigilancia, webhooks
@@ -159,7 +167,8 @@ scripts/migrate.mjs     # DDL idempotente
 
 ## Seguridad
 
-- Sin registro libre: la primera cuenta nace admin y los admins gestionan el resto en Ajustes → Usuarios. Desactivar una cuenta cierra sus sesiones y detiene sus rutinas.
+- Sin registro libre: la primera cuenta nace superadmin. Los admins gestionan las cuentas normales y los superadmins, también a los admins y la configuración de la instancia.
+- Por cuenta se controlan permisos, modelos y cupo mensual de tokens (Ajustes → Usuarios). Se aplican en el servidor en cada run, también en las rutinas. Desactivar una cuenta cierra sus sesiones y detiene sus rutinas.
 - Contraseñas con scrypt; sesiones con token aleatorio (solo se guarda su SHA-256) y cookie `httpOnly`.
 - API keys y secretos de conectores cifrados en reposo; el sidecar los recibe por petición firmada y no los registra.
 - Las rutas `/api/internal/*` solo aceptan el token de run firmado, atado a run y usuario, y solo mientras el run sigue en marcha.
@@ -170,10 +179,13 @@ scripts/migrate.mjs     # DDL idempotente
 ## Limitaciones conocidas
 
 - **Una sola instancia de la app**: el bus de eventos y el ejecutor son de un solo proceso (haría falta LISTEN/NOTIFY).
-- Con Claude Code (suscripción) las respuestas llegan de golpe, sin streaming, y hay una sola suscripción para toda la instancia.
+- **Proveedores.** Ajustes → *Claves de API* (servicios de pago por uso con clave) y Ajustes → *Suscripciones* (planes personales: Claude, ChatGPT y OpenCode Go). Puedes tener varios activos a la vez y elegir qué modelos de cada uno aparecen en el selector del chat; la estrella marca el predeterminado.
+- **Suscripciones personales.** Cada usuario vincula su propia cuenta y nunca se comparte:
+  - *Claude*: «Vincular cuenta de Anthropic» (el `claude setup-token` oficial corre en el servidor) o pegar un token. Los modelos se leen de la propia suscripción. Las respuestas llegan de golpe, sin streaming.
+  - *ChatGPT*: «Sign in with ChatGPT», la vía oficial de OpenAI (en *preview*). Al autorizar, el navegador va a `http://127.0.0.1:1455/…` (no carga): copia esa dirección y pégala en Nexus. El token se renueva solo.
 - Los adjuntos y el conocimiento se extraen como texto: los PDF escaneados (sin capa de texto) no funcionan.
 - La búsqueda en el conocimiento es de **texto completo** (palabras), no semántica.
-- El texto de un agente público incluye su conocimiento: quien lo use puede consultarlo (no descargar los ficheros).
+- Compartir una skill publica su paquete, incluidas sus referencias y recursos; las copias privadas son independientes.
 - Para OpenCode Go, si la URL base por defecto no acepta tu clave, indica la correcta en el campo «URL base» de Ajustes.
 
 ## Migrar desde Plexo

@@ -23,11 +23,13 @@ export interface OpenUiContext {
   mode?: string | null;
   /** El usuario lo ha pedido explícitamente en el compositor. */
   userToggle?: boolean;
+  /** La instancia ofrece la UI en todos los turnos y el modelo decide si la usa. */
+  auto?: boolean;
 }
 
 export function openuiToolsEnabled(context: OpenUiContext): boolean {
   if (!openuiEnabled()) return false;
-  if (context.userToggle) return true;
+  if (context.userToggle || context.auto) return true;
   if (context.mode === "research") return true;
   const focus = (context.focus ?? "").toLowerCase();
   return focus !== "" && defaultFocusSet().has(focus);

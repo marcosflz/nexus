@@ -2,12 +2,11 @@ import json
 
 import httpx
 import pytest
-from nas.adk.core.interrupts import ToolInterrupt
+from nas.adk.ui import FollowupTools, OpenUiBackendError, OpenUiTools
 
-from nexus_agent.bff import BffClient, BffError
+from nexus_agent.bff import BffClient, BffError, BffOpenUiBackend
 from nexus_agent.contract import BffLink
 from nexus_agent.state import RunState
-from nexus_agent.tools.ui import FollowupTools, UiTools
 from nexus_agent.tools.web import WebTools
 
 
@@ -154,7 +153,6 @@ def bff_with(handler):
 
 
 async def test_present_openui_validates_through_the_bff():
-    state, _ = new_state()
     seen = {}
 
     def handler(request):
@@ -163,41 +161,28 @@ async def test_present_openui_validates_through_the_bff():
         ok = "root =" in body["ui"]
         return httpx.Response(200, json={"ok": ok, "error": None if ok else "sin root"})
 
-    ui = UiTools(state, bff_with(handler))
+    ui = OpenUiTools(BffOpenUiBackend(bff_with(handler)))
     assert json.loads(await ui.present_openui("root = Card([])")) == {"displayed": True}
-    bad = json.loads(await ui.present_openui("hola"))
-    assert "sin root" in bad["error"]
+    assert "sin root" in json.loads(await ui.present_openui("hola"))["error"]
     assert seen["auth"] == "Bearer tok"
-    assert "vacío" in json.loads(await ui.present_openui("   "))["error"]
 
 
-async def test_prompt_openui_interrupts_only_when_the_program_is_valid():
-    state, _ = new_state()
-    ui = UiTools(state, bff_with(lambda r: httpx.Response(200, json={"ok": True})))
-    with pytest.raises(ToolInterrupt) as raised:
-        await ui.prompt_openui("root = Form([])")
-    assert raised.value.reason == "openui_form"
-
-    invalid = UiTools(state, bff_with(lambda r: httpx.Response(200, json={"ok": False, "error": "mal"})))
-    assert "mal" in json.loads(await invalid.prompt_openui("x"))["error"]
-
-
-async def test_validator_outage_does_not_block_the_ui():
-    state, _ = new_state()
-    ui = UiTools(state, bff_with(lambda r: httpx.Response(503)))
+async def test_bff_outage_does_not_block_the_ui_and_is_reported_for_the_spec():
+    ui = OpenUiTools(BffOpenUiBackend(bff_with(lambda r: httpx.Response(503))))
     assert json.loads(await ui.present_openui("root = Card([])")) == {"displayed": True}
+    assert "503" in json.loads(await ui.openui_spec("data"))["error"]
+    with pytest.raises(OpenUiBackendError):
+        await BffOpenUiBackend(bff_with(lambda r: httpx.Response(503))).validate("x")
 
 
-async def test_openui_spec_rejects_unknown_profiles():
-    state, _ = new_state()
-    ui = UiTools(state, bff_with(lambda r: httpx.Response(200, json={"spec": "ESPEC"})))
+async def test_openui_spec_comes_from_the_bff():
+    ui = OpenUiTools(BffOpenUiBackend(bff_with(lambda r: httpx.Response(200, json={"spec": "ESPEC"}))))
     assert await ui.openui_spec("data") == "ESPEC"
-    assert "desconocido" in json.loads(await ui.openui_spec("inventado"))["error"]
 
 
 async def test_followups_are_cleaned_capped_and_emitted():
     state, events = new_state()
-    out = json.loads(await FollowupTools(state).suggest_followups(["  ¿A?  ", "", "B", "C", "D", "E", "F"]))
+    out = json.loads(await FollowupTools(state.set_followups).suggest_followups(["  ¿A?  ", "", "B", "C", "D", "E", "F"]))
     assert out["count"] == 5
     assert events[-1] == {
         "type": "CUSTOM", "name": "nexus.followups", "value": {"questions": ["¿A?", "B", "C", "D", "E"]},

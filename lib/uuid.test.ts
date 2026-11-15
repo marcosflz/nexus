@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { randomId } from "./uuid";
+import { installRandomUuid, randomId } from "./uuid";
 
 /** UUID v4 según RFC 4122. */
 const V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -39,5 +39,29 @@ describe("randomId", () => {
   it("genera identificadores distintos", () => {
     const ids = new Set(Array.from({ length: 500 }, () => randomId()));
     expect(ids.size).toBe(500);
+  });
+});
+
+describe("installRandomUuid", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("define crypto.randomUUID donde falta, para las librerías que lo llaman a pelo", () => {
+    // Por HTTP los componentes de OpenUI fallaban con «crypto.randomUUID is not a function».
+    const insecure = { getRandomValues: (bytes: Uint8Array) => bytes.fill(7) } as unknown as Crypto;
+    vi.stubGlobal("crypto", insecure);
+
+    installRandomUuid();
+
+    expect(crypto.randomUUID()).toMatch(V4);
+    expect(randomId()).toMatch(V4);
+  });
+
+  it("no toca el del navegador cuando existe", () => {
+    const native = vi.fn(() => "11111111-2222-4333-8444-555555555555");
+    vi.stubGlobal("crypto", { randomUUID: native });
+
+    installRandomUuid();
+
+    expect(crypto.randomUUID).toBe(native);
   });
 });

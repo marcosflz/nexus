@@ -1,111 +1,68 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { agents, messages, threads } from "@/lib/db/schema";
-import { checkAgentBudget } from "@/lib/agents/budget";
+import { bots, messages, runs, threads } from "@/lib/db/schema";
+import { checkBotBudget } from "@/lib/agents/budget";
 import { BACKEND_UNAVAILABLE, getBackend, isBackendAvailable } from "@/lib/agents/registry";
-import { loadVersion } from "@/lib/agents/store";
+import { defaultAgentSpec } from "@/lib/agents/spec";
+import { runtimeOfBot } from "@/lib/bots/profile";
+import { botConnector, standardBotConnector } from "@/lib/bots/client";
 import { connectorsForRun } from "@/lib/connectors/store";
 import { createNotification } from "@/lib/notifications/store";
 import { defaultExecutorDeps } from "./deps";
 import { makeOnFinished } from "./finish-hooks";
+import { hasPermission } from "@/lib/access";
+import { getUserAccess } from "@/lib/users";
+import { getProvider } from "@/lib/providers";
 import { loadCredential } from "./launch";
 import { activeRunCount } from "./registry";
 import { startRun } from "./start";
 import { createRun } from "./store";
 
 export const maxConcurrentRuns = () => Math.max(1, Number(process.env.NEXUS_MAX_CONCURRENT_RUNS) || 4);
-
-export type RoutineOutcome =
-  | { ok: true; runId: string; threadId: string }
-  /** `retry`: no es un fallo del agente sino falta de hueco; se vuelve a intentar luego. */
-  | { ok: false; error: string; retry?: boolean };
-
+export type RoutineOutcome = { ok: true; runId: string; threadId: string } | { ok: false; error: string; retry?: boolean };
 export interface RoutineRequest {
-  agentId: string;
+  botId?: string | null;
+  ownerId?: string;
   triggerId?: string | null;
   prompt: string;
-  /** Contexto no confiable (cuerpo de un webhook, contenido nuevo de un feed…). */
   context?: string;
-  /** De dónde viene, para el título del hilo: «cron», «webhook», «agente X»… */
   source: string;
   chainDepth?: number;
+  manual?: boolean;
+  computer?: { maxSteps: number };
 }
 
-/**
- * Lanza un run sin que nadie esté mirando: lo originan un cron, un webhook, un
- * feed o el fin de otro agente. Corre con la identidad y los permisos del
- * dueño del agente y con `initiator: "routine"`, así que toda acción con
- * efectos pasa por el motor de políticas y pide aprobación.
- */
+/** Scheduled and manual tasks share the same Nexbot configuration and harness. */
 export async function launchRoutineRun(request: RoutineRequest): Promise<RoutineOutcome> {
-  const [agent] = await db.select().from(agents).where(eq(agents.id, request.agentId)).limit(1);
-  if (!agent?.currentVersionId) return { ok: false, error: "El agente ya no existe" };
-  if (agent.status !== "active") return { ok: false, error: "El agente está en pausa" };
-
-  const resolved = await loadVersion(agent, agent.currentVersionId);
-  if (!resolved) return { ok: false, error: "La versión del agente no es válida" };
-  const { spec } = resolved;
-
-  if (activeRunCount() >= maxConcurrentRuns()) {
-    return { ok: false, error: "No hay hueco para otro run ahora mismo", retry: true };
-  }
-
-  const notify = (kind: "run_failed" | "budget_exceeded", title: string, body: string) =>
-    createNotification({ userId: agent.ownerId, agentId: agent.id, kind, title, body });
-
-  const budget = await checkAgentBudget(agent.id, spec, agent.ownerId);
-  if (!budget.ok) {
-    await notify("budget_exceeded", `${spec.name}: presupuesto agotado`, budget.reason);
-    return { ok: false, error: budget.reason };
-  }
-
-  if (!isBackendAvailable()) {
-    const error = BACKEND_UNAVAILABLE;
-    await notify("run_failed", `${spec.name} no pudo ejecutarse`, error);
-    return { ok: false, error };
-  }
-  const credential = await loadCredential(agent.ownerId, spec.model.provider);
-  if (!credential.ok) {
-    await notify("run_failed", `${spec.name} no pudo ejecutarse`, credential.error);
-    return { ok: false, error: credential.error };
-  }
-
+  const [bot] = request.botId ? await db.select().from(bots).where(eq(bots.id, request.botId)).limit(1) : [];
+  if (request.botId && !bot) return { ok: false, error: "El Nexbot ya no existe" };
+  if (bot && request.ownerId && bot.ownerId !== request.ownerId) return { ok: false, error: "Nexbot no encontrado" };
+  const ownerId = bot?.ownerId ?? request.ownerId;
+  if (!ownerId) return { ok: false, error: "Falta el dueño del run" };
+  const spec = bot ? runtimeOfBot(bot) : defaultAgentSpec();
+  const notify = (error: string) => createNotification({ userId: ownerId, kind: "run_failed", title: `${spec.name} no pudo ejecutarse`, body: error });
+  if (activeRunCount() >= maxConcurrentRuns()) return { ok: false, error: "No hay hueco para otro run ahora mismo", retry: true };
+  if (!isBackendAvailable()) return { ok: false, error: BACKEND_UNAVAILABLE };
+  const owner = await getUserAccess(ownerId);
+  if (!owner || owner.disabled || (bot && !hasPermission(owner, "bots")) || (!request.manual && !hasPermission(owner, "routines")) || (request.computer && !hasPermission(owner, "computer"))) return { ok: false, error: "La cuenta no tiene permiso para esta tarea" };
+  const budget = bot ? await checkBotBudget(bot.id, spec, ownerId) : { ok: true as const };
+  if (!budget.ok) { await notify(budget.reason); return { ok: false, error: budget.reason }; }
+  const credential = await loadCredential(ownerId, spec.model.provider, spec.model.model);
+  if (!credential.ok) { await notify(credential.error); return { ok: false, error: credential.error }; }
+  if (request.computer && getProvider(credential.value.provider)?.requires === "claudeCode") return { ok: false, error: "El ordenador necesita un modelo con visión por API" };
+  const link = bot?.environmentEnabled && bot.status === "running" && hasPermission(owner, "computer") ? await (request.computer ? botConnector(bot.id) : standardBotConnector(bot.id)) : null;
+  if (request.computer && !link) return { ok: false, error: "Arranca el ordenador del Nexbot antes de usarlo" };
+  const initiator = request.manual ? "user" : "trigger";
   const text = request.context ? `${request.prompt}\n\n${request.context}` : request.prompt;
-  const [thread] = await db
-    .insert(threads)
-    .values({
-      userId: agent.ownerId,
-      title: `${spec.name} · ${request.source}`.slice(0, 120),
-      agentId: agent.id,
-      backend: "nas-adk",
-      origin: "routine",
-    })
-    .returning({ id: threads.id });
-  await db.insert(messages).values({ threadId: thread.id, role: "user", content: text.slice(0, 20_000), agentId: agent.id });
-
+  const [thread] = await db.insert(threads).values({ userId: ownerId, botId: bot?.id, title: `${spec.name} · ${request.source}`.slice(0, 120), backend: "nas-adk", origin: request.manual ? "chat" : "routine" }).returning({ id: threads.id });
+  await db.insert(messages).values({ threadId: thread.id, role: "user", content: text.slice(0, 20_000) });
   const backend = getBackend();
-  const run = await createRun(thread.id, agent.ownerId, text, {
-    initiator: "trigger",
-    backend: backend.id,
-    agentId: agent.id,
-    agentVersionId: resolved.versionId,
-  });
-
-  void startRun(
-    backend,
-    {
-      runId: run.id,
-      threadId: thread.id,
-      userId: agent.ownerId,
-      initiator: "trigger",
-      credential: { ...credential.value, model: spec.model.model || credential.value.model },
-      userText: text,
-      agent: { id: agent.id, versionId: resolved.versionId, spec },
-      connectors: (await connectorsForRun(agent.ownerId, agent.id, spec)).links,
-      limits: { maxTurns: spec.budgets.maxToolCalls || 25 },
-    },
-    { ...defaultExecutorDeps(), onFinished: makeOnFinished({ chainDepth: request.chainDepth }) },
-  );
-
+  const run = await createRun(thread.id, ownerId, text, { initiator, backend: backend.id, botId: bot?.id, computer: Boolean(request.computer) });
+  if (request.triggerId) await db.update(runs).set({ triggerId: request.triggerId }).where(eq(runs.id, run.id));
+  void startRun(backend, { runId: run.id, threadId: thread.id, userId: ownerId, initiator, credential: credential.value,
+    userText: text, agent: { id: null, versionId: null, spec }, botVersionId: bot?.currentVersionId, computer: Boolean(request.computer),
+    connectors: request.computer ? [link!] : [...(await connectorsForRun(ownerId, null, spec)).links, ...(link ? [link] : [])],
+    limits: { maxTurns: request.computer?.maxSteps ?? (spec.budgets.maxToolCalls || 25) },
+  }, { ...defaultExecutorDeps(), onFinished: makeOnFinished({ chainDepth: request.chainDepth }) });
   return { ok: true, runId: run.id, threadId: thread.id };
 }

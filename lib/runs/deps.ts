@@ -16,7 +16,7 @@ export function defaultExecutorDeps(): ExecutorDeps {
     // Los runs de usuario también encadenan a los agentes suscritos a su fin.
     onFinished: makeOnFinished(),
 
-    async saveAssistantMessage({ threadId, runId, content, sources, tools, parts, followups, usage }) {
+    async saveAssistantMessage({ threadId, runId, content, sources, tools, parts, followups, usage, reasoning }) {
       const [row] = await db
         .insert(messages)
         .values({
@@ -29,6 +29,7 @@ export function defaultExecutorDeps(): ExecutorDeps {
           parts,
           followups,
           usage,
+          reasoning: reasoning ?? null,
         })
         .returning({ id: messages.id });
       await db.update(threads).set({ updatedAt: new Date() }).where(eq(threads.id, threadId));

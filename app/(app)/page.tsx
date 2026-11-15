@@ -11,7 +11,7 @@ export default async function HomePage({
 }) {
   const query = await searchParams;
   const pick = (value: string | string[] | undefined) => (typeof value === "string" ? value : null);
-  const agent = pick(query.agent);
+  const agent = pick(query.bot);
   const thread = pick(query.thread);
   return (
     <ChatApp

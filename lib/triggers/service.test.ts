@@ -36,10 +36,10 @@ describe("prepareTrigger", () => {
     expect(slow.ok && slow.config.intervalMin).toBe(1440);
   });
 
-  it("agent_completed: exige un id de agente", () => {
-    expect(prepareTrigger({ kind: "agent_completed", config: {} }).ok).toBe(false);
+  it("bot_completed: exige un id de agente", () => {
+    expect(prepareTrigger({ kind: "bot_completed", config: {} }).ok).toBe(false);
     expect(
-      prepareTrigger({ kind: "agent_completed", config: { sourceAgentId: "11111111-1111-4111-8111-111111111111" } }).ok,
+      prepareTrigger({ kind: "bot_completed", config: { sourceBotId: "11111111-1111-4111-8111-111111111111" } }).ok,
     ).toBe(true);
   });
 });

@@ -1,0 +1,21 @@
+{
+  "URLBlocklist": [
+    "file://*",
+    "chrome://*",
+    "chrome-untrusted://*",
+    "chrome-extension://*",
+    "devtools://*",
+    "view-source:*"
+  ],
+  "URLAllowlist": [
+    "chrome://omnibox-popup.top-chrome"
+  ],
+  "ExtensionInstallBlocklist": [
+    "*"
+  ],
+  "PasswordManagerEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "BrowserSignin": 0,
+  "SyncDisabled": true
+}

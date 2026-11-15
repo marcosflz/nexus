@@ -18,6 +18,10 @@ from typing import Any
 from nas.adk.core.events.event import Event
 
 MAX_TOOL_RESULT_CHARS = 2000
+NEXUS_REASONING = "nexus.reasoning"
+# El razonamiento llega en fragmentos muy pequeños: se agrupa para no llenar el log del run.
+REASONING_FLUSH_CHARS = 240
+MAX_REASONING_CHARS = 24_000
 
 
 class AgUiMapper:
@@ -26,6 +30,18 @@ class AgUiMapper:
         self._index = 0
         self._open = False
         self._streamed = False
+        self._reasoning = ""
+        self._reasoning_sent = 0
+
+    # --- razonamiento --------------------------------------------------------
+
+    def _flush_reasoning(self) -> list[dict[str, Any]]:
+        text, self._reasoning = self._reasoning, ""
+        text = text[: max(0, MAX_REASONING_CHARS - self._reasoning_sent)]
+        if not text:
+            return []
+        self._reasoning_sent += len(text)
+        return [{"type": "CUSTOM", "name": NEXUS_REASONING, "value": {"delta": text}}]
 
     # --- texto -------------------------------------------------------------
 
@@ -56,6 +72,16 @@ class AgUiMapper:
     # --- API ---------------------------------------------------------------
 
     def feed(self, event: Event) -> list[dict[str, Any]]:
+        if event.type == "skill":
+            return [{"type": "CUSTOM", "name": "nexus.skill", "value": {"id": event.content, "name": event.metrics.get("name"), "status": event.status}}]
+        if event.type == "reasoning":
+            self._reasoning += event.content or ""
+            return self._flush_reasoning() if len(self._reasoning) >= REASONING_FLUSH_CHARS else []
+        # Lo pensado va antes que lo que viene después (texto, herramienta o resultado).
+        pending = self._flush_reasoning()
+        return pending + self._feed(event)
+
+    def _feed(self, event: Event) -> list[dict[str, Any]]:
         if event.type == "stream":
             if not event.content:
                 return []
@@ -109,7 +135,7 @@ class AgUiMapper:
 
     def finish(self) -> list[dict[str, Any]]:
         """Cierra el tramo de texto que haya quedado abierto."""
-        return self._close_text()
+        return self._flush_reasoning() + self._close_text()
 
 
 def _is_error(content: str) -> bool:

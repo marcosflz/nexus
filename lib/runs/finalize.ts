@@ -7,6 +7,7 @@ export interface FinalizedMessage {
   tools: PersistedTool[];
   /** Orden real texto/herramientas, o null si no se puede garantizar. */
   parts: PersistedPart[] | null;
+  reasoning: string | null;
 }
 
 function persistedTool(tool: UiToolCall): PersistedTool {
@@ -35,11 +36,13 @@ export function finalizeAssistantMessage(state: AgUiState, finalText: string): F
       content: finalText,
       tools: state.message.tools.map(persistedTool),
       parts: null,
+      reasoning: state.message.reasoning || null,
     };
   }
   return {
     content: streamed,
     tools: state.message.tools.map(persistedTool),
     parts: state.message.parts ?? null,
+    reasoning: state.message.reasoning || null,
   };
 }

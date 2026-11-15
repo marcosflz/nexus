@@ -1,6 +1,6 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { projects, threads } from "@/lib/db/schema";
+import { projects, runs, threads } from "@/lib/db/schema";
 
 export interface ThreadRow {
   id: string;
@@ -8,6 +8,8 @@ export interface ThreadRow {
   updatedAt: string;
   pinnedAt: string | null;
   projectId: string | null;
+  /** Hay un run en marcha (con lease vigente) en el hilo. */
+  running: boolean;
 }
 
 export interface ProjectRow {
@@ -24,7 +26,18 @@ export const threadSummaryColumns = {
   updatedAt: threads.updatedAt,
   pinnedAt: threads.pinnedAt,
   projectId: threads.projectId,
+  running: threadRunning(),
 };
+
+/**
+ * ¿Hay un run en curso en el hilo? Se exige el lease vigente para que un run
+ * huérfano (el proceso murió sin cerrarlo) no deje el indicador girando.
+ */
+export function threadRunning() {
+  return sql<boolean>`exists (select 1 from ${runs} where ${runs.threadId} = ${threads.id} and ${runs.status} = 'running' and ${runs.leaseUntil} > now())`.mapWith(
+    Boolean,
+  );
+}
 
 export function serializeThread(row: {
   id: string;
@@ -32,6 +45,7 @@ export function serializeThread(row: {
   updatedAt: Date;
   pinnedAt: Date | null;
   projectId: string | null;
+  running?: boolean;
 }): ThreadRow {
   return {
     id: row.id,
@@ -39,6 +53,7 @@ export function serializeThread(row: {
     updatedAt: row.updatedAt.toISOString(),
     pinnedAt: row.pinnedAt ? row.pinnedAt.toISOString() : null,
     projectId: row.projectId,
+    running: row.running === true,
   };
 }
 
@@ -46,7 +61,8 @@ export async function listThreadsFor(userId: string, limit = 200): Promise<Threa
   const rows = await db
     .select(threadSummaryColumns)
     .from(threads)
-    .where(eq(threads.userId, userId))
+    // Los hilos de las salas de NexBots se ven en su sala, no en la barra del chat.
+    .where(and(eq(threads.userId, userId), ne(threads.origin, "room"), ne(threads.origin, "skill_creator"), ne(threads.origin, "skill_test")))
     .orderBy(desc(threads.updatedAt))
     .limit(limit);
   return rows.map(serializeThread);

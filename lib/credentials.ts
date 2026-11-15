@@ -89,3 +89,135 @@ export async function deleteCredential(userId: string, provider: string): Promis
     if (next) await tx.update(credentials).set({ isDefault: true }).where(eq(credentials.id, next.id));
   });
 }
+
+/**
+ * Guarda solo la clave cifrada de un proveedor, sin tocar cuál es el predeterminado.
+ * Si el usuario aún no tenía ninguna credencial, esta pasa a serlo.
+ */
+export async function setCredentialKey(input: {
+  userId: string;
+  provider: string;
+  apiKeyEnc: string;
+  defaultModel: string;
+}): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [any] = await tx
+      .select({ id: credentials.id })
+      .from(credentials)
+      .where(eq(credentials.userId, input.userId))
+      .limit(1);
+    await tx
+      .insert(credentials)
+      .values({
+        userId: input.userId,
+        provider: input.provider,
+        model: input.defaultModel,
+        apiKeyEnc: input.apiKeyEnc,
+        baseUrl: null,
+        isDefault: !any,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [credentials.userId, credentials.provider],
+        set: { apiKeyEnc: input.apiKeyEnc, updatedAt: new Date() },
+      });
+  });
+}
+
+/** Borra la clave de un proveedor y conserva el resto (modelo elegido, predeterminado). */
+export async function clearCredentialKey(userId: string, provider: string): Promise<void> {
+  await db
+    .update(credentials)
+    .set({ apiKeyEnc: null, updatedAt: new Date() })
+    .where(and(eq(credentials.userId, userId), eq(credentials.provider, provider)));
+}
+
+export interface ModelEntry {
+  id: string;
+  label: string;
+  /** Aviso para el catálogo (no se guarda). */
+  hint?: string;
+}
+
+/** Modelos activos de una credencial (las filas antiguas guardaban solo ids). */
+export function enabledModels(row: Pick<CredentialRow, "models" | "model">): ModelEntry[] {
+  const raw = Array.isArray(row.models) ? row.models : row.model ? [row.model] : [];
+  const seen = new Set<string>();
+  const out: ModelEntry[] = [];
+  for (const item of raw) {
+    const entry = typeof item === "string" ? { id: item, label: item } : item;
+    if (!entry || typeof entry.id !== "string" || !entry.id || seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    out.push({ id: entry.id, label: typeof entry.label === "string" && entry.label ? entry.label : entry.id });
+  }
+  return out;
+}
+
+export interface ProviderConfigInput {
+  userId: string;
+  provider: string;
+  /** Clave nueva cifrada; sin ella se conserva la guardada. */
+  apiKeyEnc?: string;
+  baseUrl?: string | null;
+  enabled?: boolean;
+  models?: ModelEntry[];
+  /** Modelo predeterminado del proveedor. */
+  model?: string;
+}
+
+/**
+ * Crea o actualiza la configuración de un proveedor SIN cambiar cuál es el predeterminado
+ * del usuario (salvo que sea su primera credencial).
+ */
+export async function saveProviderConfig(input: ProviderConfigInput): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [any] = await tx
+      .select({ id: credentials.id })
+      .from(credentials)
+      .where(eq(credentials.userId, input.userId))
+      .limit(1);
+    const models = input.models;
+    const model = input.model ?? models?.[0]?.id ?? "";
+    await tx
+      .insert(credentials)
+      .values({
+        userId: input.userId,
+        provider: input.provider,
+        model,
+        apiKeyEnc: input.apiKeyEnc,
+        baseUrl: input.baseUrl ?? null,
+        enabled: input.enabled ?? true,
+        models: models ?? (model ? [{ id: model, label: model }] : []),
+        isDefault: !any,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [credentials.userId, credentials.provider],
+        set: {
+          ...(input.apiKeyEnc ? { apiKeyEnc: input.apiKeyEnc } : {}),
+          ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
+          ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+          ...(models !== undefined ? { models } : {}),
+          ...(input.model !== undefined ? { model: input.model } : {}),
+          updatedAt: new Date(),
+        },
+      });
+  });
+}
+
+/** Marca un proveedor (y opcionalmente su modelo) como el predeterminado del usuario. */
+export async function setDefaultCredential(userId: string, provider: string, model?: string): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .update(credentials)
+      .set({ isDefault: true, ...(model ? { model } : {}), updatedAt: new Date() })
+      .where(and(eq(credentials.userId, userId), eq(credentials.provider, provider)))
+      .returning({ id: credentials.id });
+    if (updated.length === 0) return false;
+    await tx
+      .update(credentials)
+      .set({ isDefault: false })
+      .where(and(eq(credentials.userId, userId), ne(credentials.provider, provider)));
+    return true;
+  });
+}

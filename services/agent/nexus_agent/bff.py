@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+from nas.adk.ui import OpenUiBackendError
 
 from .contract import BffLink
 
@@ -58,5 +59,30 @@ class BffClient:
         results = data.get("results", [])
         return results if isinstance(results, list) else []
 
+    async def board(self, op: str, **fields: Any) -> dict[str, Any]:
+        return await self._post("rooms/board", {"op": op, **fields})
+
     async def memory(self, op: str, **fields: Any) -> dict[str, Any]:
         return await self._post("memory", {"op": op, **fields})
+
+    async def skills(self, op: str, **fields: Any) -> dict[str, Any]:
+        return await self._post("skills", {"op": op, **fields})
+
+
+class BffOpenUiBackend:
+    """`OpenUiBackend` de nas-adk: valida y sirve la especificación con la librería del BFF."""
+
+    def __init__(self, bff: BffClient) -> None:
+        self._bff = bff
+
+    async def validate(self, program: str) -> dict[str, Any]:
+        try:
+            return await self._bff.validate_openui(program)
+        except BffError as error:
+            raise OpenUiBackendError(str(error)) from error
+
+    async def spec(self, profile: str) -> str:
+        try:
+            return await self._bff.openui_spec(profile)
+        except BffError as error:
+            raise OpenUiBackendError(str(error)) from error

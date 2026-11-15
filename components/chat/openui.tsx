@@ -3,8 +3,8 @@
 import type { ToolCallMessagePartComponent } from "@assistant-ui/react";
 import { OpenUIPresent, OpenUIPrompt } from "@openuidev/assistant-ui";
 import { useTheme } from "next-themes";
-import { OPENUI_TOOL_NAME, unwrapOpenUiProgram } from "@/lib/openui/blocks";
-import { nexusLibrary } from "@/lib/openui/library";
+import { OPENUI_TOOL_NAME } from "@/lib/openui/blocks";
+import { nexusLibrary, normalizeOpenUiProgram } from "@/lib/openui/library";
 import { nexusDarkTheme, nexusLightTheme } from "@/lib/openui/themes";
 
 export const OPENUI_PROMPT_TOOL_NAME = "prompt_openui";
@@ -39,10 +39,21 @@ export const OpenUIPresentTool: ToolCallMessagePartComponent = (props) => {
         args={args}
         library={nexusLibrary}
         theme={theme}
+        ErrorFallback={RenderIssue}
       />
     </div>
   );
 };
+
+/**
+ * Si aun así algo no se puede pintar, OpenUI muestra lo que sí puede. El aviso por
+ * defecto de la librería (en inglés) no aporta nada a quien lee la respuesta, y un
+ * argumento de más (que se descarta sin cambiar lo que se ve) no merece aviso.
+ */
+function RenderIssue({ errors }: { errors: readonly { code?: string }[] }) {
+  if (errors.every((error) => error.code === "excess-args")) return null;
+  return <p className="text-muted-fg mt-2 text-[12px]">Parte de esta interfaz no se ha podido mostrar.</p>;
+}
 
 /** El validador del sidecar devuelve `{"error": …}` como resultado (no como excepción). */
 function rejected(result: unknown): boolean {
@@ -51,7 +62,7 @@ function rejected(result: unknown): boolean {
 
 function withProgram(args: unknown): { ui: string } {
   const ui = (args as { ui?: unknown } | undefined)?.ui;
-  return { ...(args as object), ui: typeof ui === "string" ? unwrapOpenUiProgram(ui) : "" };
+  return { ...(args as object), ui: typeof ui === "string" ? normalizeOpenUiProgram(ui) : "" };
 }
 
 /**
@@ -67,6 +78,7 @@ export const OpenUIPromptTool: ToolCallMessagePartComponent = (props) => {
         args={withProgram(props.args)}
         library={nexusLibrary}
         theme={theme}
+        ErrorFallback={RenderIssue}
       />
     </div>
   );

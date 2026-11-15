@@ -20,6 +20,7 @@ import { createContext, useContext } from "react";
 import { Markdown } from "@/components/ui/markdown";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
+import { describeStep } from "@/components/rooms/tool-steps";
 import { TextShimmer } from "@/components/ui/text-shimmer";
 import { Button } from "@/components/ui/button";
 import { citationIdsOf, remarkCitations, stripSourcesBlock } from "@/lib/markdown/citations";
@@ -144,9 +145,10 @@ export function UserText() {
 export function ReasoningPart() {
   const text = useAuiState((state) => (state.part.type === "reasoning" ? state.part.text : ""));
   const running = useAuiState((state) => state.message.status?.type === "running");
-  if (!text) return null;
+  // Mientras trabaja, el estado ya se ve en la cabecera («Pensando…»); el razonamiento se ofrece al terminar.
+  if (!text || running) return null;
   return (
-    <Reasoning isStreaming={running} className="my-3">
+    <Reasoning className="my-3">
       <ReasoningTrigger className="text-muted-fg text-[13px]">Razonamiento</ReasoningTrigger>
       <ReasoningContent markdown>{text}</ReasoningContent>
     </Reasoning>
@@ -235,7 +237,11 @@ function otherStepInfo(step: StepPart): { icon: ReactNode; label: string } {
     case "forget":
       return { icon: <Brain className="size-3.5" />, label: "Memoria" };
     default:
-      return { icon: <Wrench className="size-3.5" />, label: step.toolName };
+      // Las acciones de un NexBot se describen en claro («Clic en (x, y)», «Guarda …»).
+      return {
+        icon: <Wrench className="size-3.5" />,
+        label: describeStep({ id: step.toolCallId, name: step.toolName, input: step.args, status: "complete" }),
+      };
   }
 }
 

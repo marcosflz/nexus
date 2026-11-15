@@ -22,6 +22,19 @@ body {
 body {
   background: var(--bg);
   color: var(--fg);
+  /* La página no rebota entera ni resalta en gris al tocar; cada panel hace su propio scroll. */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* iOS amplía la página al enfocar un campo con letra menor de 16px. */
+@media (hover: none) and (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
 }
 
 /* Prosa del asistente: serif de lectura, 17px e interlineado amplio (como Perplexity) */
@@ -30,6 +43,8 @@ body {
   line-height: 1.7;
   font-size: 1.0625rem;
   color: var(--fg);
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 .aui-md > * + * { margin-top: 0.9rem; }
 .aui-md h1, .aui-md h2, .aui-md h3 { font-weight: 600; margin-top: 1.6rem; letter-spacing: -0.005em; line-height: 1.35; }
@@ -62,11 +77,17 @@ body {
 .aui-md blockquote { border-left: 2px solid var(--brand); padding-left: 0.9rem; color: var(--fg-soft); }
 .aui-md table { border-collapse: collapse; width: 100%; font-size: 0.925rem; font-family: var(--font-sans); }
 .aui-md th { font-weight: 500; color: var(--muted-fg); }
+@media (max-width: 640px) {
+  /* Las tablas anchas se desplazan dentro de sí mismas en vez de ensanchar la página. */
+  .aui-md table { display: block; overflow-x: auto; }
+}
 .aui-md th, .aui-md td { border-bottom: 1px solid var(--border); padding: 0.55rem 0.6rem; text-align: left; }
 
 /* Superficies de la UI generativa dentro del hilo */
 .nexus-openui {
   margin-top: 0.75rem;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .nexus-openui pre,

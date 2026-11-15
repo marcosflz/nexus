@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { accessSchema } from "@/lib/access";
 import { requireAdmin } from "@/lib/auth";
-import { deleteUser, generatePassword, updateUser } from "@/lib/users";
+import { deleteUser, generatePassword, getUserDetail, updateUser } from "@/lib/users";
 
 export const runtime = "nodejs";
 
 const patchSchema = z
   .object({
-    role: z.enum(["admin", "user"]).optional(),
+    role: z.enum(["superadmin", "admin", "user"]).optional(),
     disabled: z.boolean().optional(),
+    disabledReason: z.string().trim().max(500).nullable().optional(),
+    adminNote: z.string().trim().max(4000).nullable().optional(),
+    email: z.string().trim().toLowerCase().email().max(200).optional(),
     canUseClaudeCode: z.boolean().optional(),
+    access: accessSchema.optional(),
     password: z.string().min(8).max(200).optional(),
     /** Genera una contraseña nueva y la devuelve una sola vez. */
     resetPassword: z.literal(true).optional(),
@@ -19,6 +24,16 @@ const patchSchema = z
 const idSchema = z.string().uuid();
 
 type RouteContext = { params: Promise<{ id: string }> };
+
+export async function GET(_req: NextRequest, context: RouteContext) {
+  const auth = await requireAdmin();
+  if ("response" in auth) return auth.response;
+  const id = idSchema.safeParse((await context.params).id);
+  if (!id.success) return NextResponse.json({ error: "Petición no válida" }, { status: 400 });
+  const detail = await getUserDetail(id.data);
+  if (!detail) return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
+  return NextResponse.json({ ...detail, currentUserId: auth.user.id, actorRole: auth.user.role });
+}
 
 export async function PATCH(req: NextRequest, context: RouteContext) {
   const auth = await requireAdmin();
@@ -32,7 +47,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 
   const { resetPassword, ...patch } = parsed.data;
   const generatedPassword = resetPassword ? generatePassword() : null;
-  const result = await updateUser(auth.user.id, id.data, {
+  const result = await updateUser(auth.user, id.data, {
     ...patch,
     ...(generatedPassword ? { password: generatedPassword } : {}),
   });
@@ -47,7 +62,7 @@ export async function DELETE(_req: NextRequest, context: RouteContext) {
   const id = idSchema.safeParse((await context.params).id);
   if (!id.success) return NextResponse.json({ error: "Petición no válida" }, { status: 400 });
 
-  const result = await deleteUser(auth.user.id, id.data);
+  const result = await deleteUser(auth.user, id.data);
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
   return NextResponse.json({ ok: true });
 }

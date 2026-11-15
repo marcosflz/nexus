@@ -34,7 +34,7 @@ export function KnowledgePanel({
   const input = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/agents/${agentId}/knowledge`);
+    const res = await fetch(`/api/bots/${agentId}/knowledge`);
     if (res.ok) setFiles(((await res.json()) as { files: KnowledgeFile[] }).files);
   }, [agentId]);
 
@@ -48,7 +48,7 @@ export function KnowledgePanel({
     try {
       const form = new FormData();
       Array.from(list).forEach((file) => form.append("files", file));
-      const res = await fetch(`/api/agents/${agentId}/knowledge`, { method: "POST", body: form });
+      const res = await fetch(`/api/bots/${agentId}/knowledge`, { method: "POST", body: form });
       const data = (await res.json().catch(() => ({}))) as {
         results?: { name: string; ok: boolean; error?: string; chunks?: number; duplicate?: boolean }[];
         error?: string;
@@ -70,7 +70,7 @@ export function KnowledgePanel({
   }
 
   async function remove(file: KnowledgeFile) {
-    const res = await fetch(`/api/agents/${agentId}/knowledge?fileId=${file.id}`, { method: "DELETE" });
+    const res = await fetch(`/api/bots/${agentId}/knowledge?fileId=${file.id}`, { method: "DELETE" });
     if (!res.ok) return toast.error("No se pudo eliminar");
     setFiles((prev) => prev.filter((item) => item.id !== file.id));
   }

@@ -14,15 +14,32 @@ export interface ProviderInfo {
   modelsAuth?: "bearer" | "anthropic";
   /** Modelos fijos que se ofrecen en un desplegable, sin consultar a nadie. */
   modelOptions?: string[];
-  /** Depende del contenedor del sidecar y de un permiso concedido por un admin. */
-  requires?: "claudeCode";
+  /**
+   * Suscripción personal que cada usuario vincula con su cuenta (nunca compartida). Requiere el
+   * permiso de suscripciones que concede un admin.
+   */
+  requires?: "claudeCode" | "chatgpt";
+  /** `api`: servicios con clave de API. `subscription`: planes personales (Claude, ChatGPT…). */
+  kind: "api" | "subscription";
+  /** Cómo se conecta: con una clave, o vinculando la cuenta (Claude Code / ChatGPT). */
+  linkFlow: "key" | "claude" | "chatgpt";
+  /** Breve explicación para la tarjeta del proveedor. */
+  hint?: string;
 }
 
 export const CLAUDE_CODE_PROVIDER = "claude-code";
+export const CHATGPT_PROVIDER = "chatgpt";
+
+/** Proveedores de suscripción personal (necesitan el permiso de un admin). */
+export function isPersonalSubscription(id: string): boolean {
+  return Boolean(getProvider(id)?.requires);
+}
 
 export const PROVIDERS: ProviderInfo[] = [
   {
     id: "openrouter",
+    kind: "api",
+    linkFlow: "key",
     label: "OpenRouter",
     needsKey: true,
     defaultModel: "anthropic/claude-sonnet-4.6",
@@ -31,6 +48,8 @@ export const PROVIDERS: ProviderInfo[] = [
   },
   {
     id: "openai-api",
+    kind: "api",
+    linkFlow: "key",
     label: "OpenAI",
     needsKey: true,
     defaultModel: "gpt-5.5",
@@ -39,6 +58,8 @@ export const PROVIDERS: ProviderInfo[] = [
   },
   {
     id: "anthropic",
+    kind: "api",
+    linkFlow: "key",
     label: "Anthropic (API)",
     needsKey: true,
     defaultModel: "claude-sonnet-5-5",
@@ -48,6 +69,8 @@ export const PROVIDERS: ProviderInfo[] = [
   },
   {
     id: "gemini",
+    kind: "api",
+    linkFlow: "key",
     label: "Google Gemini",
     needsKey: true,
     defaultModel: "gemini-3-flash",
@@ -55,6 +78,8 @@ export const PROVIDERS: ProviderInfo[] = [
   },
   {
     id: "deepseek",
+    kind: "api",
+    linkFlow: "key",
     label: "DeepSeek",
     needsKey: true,
     defaultModel: "deepseek-chat",
@@ -62,6 +87,8 @@ export const PROVIDERS: ProviderInfo[] = [
   },
   {
     id: "lmstudio",
+    kind: "api",
+    linkFlow: "key",
     label: "LM Studio / OpenAI-compatible local",
     needsKey: false,
     defaultModel: "local-model",
@@ -70,6 +97,9 @@ export const PROVIDERS: ProviderInfo[] = [
   {
     // Suscripción OpenCode Go: el sidecar usa el proveedor `opencode` de nas-adk.
     id: "opencode-go",
+    kind: "subscription",
+    linkFlow: "key",
+    hint: "Tu suscripción de OpenCode Go, con la clave de opencode.ai/console/go.",
     label: "OpenCode Go",
     needsKey: true,
     defaultModel: "claude-haiku-5-5",
@@ -77,14 +107,27 @@ export const PROVIDERS: ProviderInfo[] = [
     modelsUrl: "https://opencode.ai/zen/go/v1/models",
   },
   {
-    // Usa la suscripción configurada en el servidor (CLAUDE_CODE_OAUTH_TOKEN), no una clave
-    // del usuario. Los alias los resuelve el CLI; `default` deja que elija él.
+    // Usa la suscripción de Anthropic que cada usuario vincula a su propia cuenta (nunca una
+    // común). Los alias los resuelve el CLI; `default` deja que elija él.
     id: CLAUDE_CODE_PROVIDER,
-    label: "Claude Code (suscripción)",
+    kind: "subscription",
+    linkFlow: "claude",
+    hint: "Tu suscripción de Claude (Pro o Max), a través de Claude Code.",
+    label: "Claude",
     needsKey: false,
     defaultModel: "default",
-    modelOptions: ["default", "sonnet", "opus", "haiku"],
     requires: "claudeCode",
+  },
+  {
+    // «Sign in with ChatGPT»: cada usuario autoriza su propio plan; el token se refresca solo.
+    id: CHATGPT_PROVIDER,
+    kind: "subscription",
+    linkFlow: "chatgpt",
+    hint: "Tu plan de ChatGPT (Plus, Pro…), con «Sign in with ChatGPT».",
+    label: "ChatGPT",
+    needsKey: false,
+    defaultModel: "",
+    requires: "chatgpt",
   },
 ];
 

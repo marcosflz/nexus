@@ -5,7 +5,7 @@ import type { SettingsSection } from "@/components/shell/shell-context";
 
 export const dynamic = "force-dynamic";
 
-const VALID: SettingsSection[] = ["account", "preferences", "models", "connectors", "usage", "users"];
+const VALID: SettingsSection[] = ["account", "preferences", "models", "subscriptions", "connectors", "usage", "search", "assistant", "claudeCode"];
 
 export default async function Page({
   searchParams,

@@ -257,3 +257,37 @@ def test_turn_instructions_from_the_bff_reach_the_system_prompt():
     text = build_instruction(make_request(turnInstructions="Modo Research: informe."), set())
     assert "Para esta pregunta:\nModo Research: informe." in text
     assert "Para esta pregunta" not in build_instruction(make_request(), set())
+
+
+def test_superadmin_prompt_overrides_and_generation_settings():
+    from nas.adk.ui import FOLLOWUP_RULES
+
+    from nexus_agent.build import build_instruction, generation_config
+
+    tools = {"present_openui", "prompt_openui", "openui_spec", "suggest_followups"}
+    default = build_instruction(make_request(), tools)
+    assert "Solo si has citado fuentes" in default
+    assert "No la uses para" in default and "openui_spec" in default
+
+    custom = build_instruction(
+        make_request(
+            prompts={
+                "core": 'Soy {name}{role}; hoy {today}. Errores: {"error": 1}',
+                "ui": "UI solo con tablas.",
+                "followups": "Sin sugerencias largas.",
+            }
+        ),
+        tools,
+    )
+    assert "Soy Nexus, un agente de investigación; hoy " in custom
+    assert '{"error": 1}' in custom
+    assert "UI solo con tablas." in custom and "No la uses para" not in custom
+    assert "Sin sugerencias largas." in custom and FOLLOWUP_RULES not in custom
+
+    blank = build_instruction(make_request(prompts={"core": "  ", "ui": None}), tools)
+    assert "Solo si has citado fuentes" in blank
+
+    assert generation_config(make_request()) == {}
+    assert generation_config(
+        make_request(generation={"temperature": 0.2, "maxTokens": 4000, "reasoningEffort": "low"})
+    ) == {"temperature": 0.2, "max_tokens": 4000, "reasoning_effort": "low"}

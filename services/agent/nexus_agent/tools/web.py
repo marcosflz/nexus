@@ -5,8 +5,10 @@ from typing import Any
 
 import httpx
 
+from ..contract import SearchConfig, SearchProviderSpec
 from ..htmltext import html_to_text
 from ..netguard import BlockedUrl, Resolver, check_url, system_resolver
+from ..search import MAX_RESULTS, Query, search, with_default_searxng
 from ..state import RunState
 
 USER_AGENT = "Mozilla/5.0 (compatible; NexusBot/0.1; +https://github.com/marcosflz/nexus)"
@@ -22,9 +24,14 @@ class WebTools:
         searxng_url: str,
         http: httpx.AsyncClient | None = None,
         resolver: Resolver = system_resolver,
+        search_config: SearchConfig | None = None,
     ) -> None:
         self._state = state
-        self._searxng = searxng_url.rstrip("/")
+        default = SearchConfig(providers=[SearchProviderSpec(id="searxng")], minResults=1)
+        chosen = search_config or default
+        self._search = chosen.model_copy(
+            update={"providers": [with_default_searxng(p, searxng_url) for p in chosen.providers]}
+        )
         self._http = http or httpx.AsyncClient(timeout=httpx.Timeout(20.0))
         self._resolver = resolver
 
@@ -40,36 +47,44 @@ class WebTools:
 
         categories: general, news, science, it, social media… time_range: day, week, month, year.
         """
-        params = {"q": query, "format": "json", "categories": categories}
-        if time_range:
-            params["time_range"] = time_range
-        if language:
-            params["language"] = language
-        try:
-            response = await self._http.get(f"{self._searxng}/search", params=params)
-            response.raise_for_status()
-            data = response.json()
-        except (httpx.HTTPError, ValueError) as error:
-            return json.dumps({"error": f"la búsqueda falló ({type(error).__name__})"})
+        outcome = await search(
+            self._http,
+            self._search,
+            Query(query, categories, time_range, language, max(1, min(max_results, MAX_RESULTS))),
+        )
+        failures = [
+            {"engine": a.provider, "error": a.error} for a in outcome.attempts if not a.ok
+        ]
+        if not outcome.hits and (failures or not outcome.attempts):
+            # Distinto de «no hay resultados»: el modelo no debe concluir que no existe nada.
+            return json.dumps(
+                {"error": "la búsqueda falló: ningún motor pudo responder", "engines": failures},
+                ensure_ascii=False,
+            )
 
         results: list[dict[str, Any]] = []
-        for item in data.get("results", [])[: max(1, min(max_results, 20))]:
-            url = item.get("url")
-            if not isinstance(url, str) or not url:
-                continue
-            title = item.get("title") if isinstance(item.get("title"), str) else None
-            source = self._state.sources.add(url, title)
+        for hit in outcome.hits:
+            source = self._state.sources.add(hit.url, hit.title)
             results.append(
                 {
                     "n": source.id,
-                    "title": title or source.domain,
-                    "url": url,
-                    "snippet": (item.get("content") or "")[:400],
-                    "published": item.get("publishedDate"),
+                    "title": hit.title or source.domain,
+                    "url": hit.url,
+                    "snippet": hit.snippet[:400],
+                    "published": hit.published,
                 }
             )
         self._state.announce_sources()
-        return json.dumps({"query": query, "results": results}, ensure_ascii=False)
+        payload: dict[str, Any] = {"query": query, "engine": outcome.provider, "results": results}
+        if results and not any(r["snippet"] for r in results):
+            for r in results:
+                r["snippet"] = None
+            # Sin extractos el modelo tiende a responder solo con titulares (o a rendirse).
+            payload["note"] = (
+                "Los resultados no traen extracto: lee con web_fetch las fuentes más relevantes "
+                "antes de responder."
+            )
+        return json.dumps(payload, ensure_ascii=False)
 
     async def web_fetch(self, url: str, max_chars: int = 12000) -> str:
         """Lee una página web y devuelve su texto. Úsala tras web_search para verificar datos."""

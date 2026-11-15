@@ -1,0 +1,5 @@
+allowBuilds:
+  '@openuidev/lang-core': false
+overrides:
+  zod: ">=4.6.6"
+  katex: ">=0.18.2"

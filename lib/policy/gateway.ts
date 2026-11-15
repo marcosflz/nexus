@@ -34,7 +34,7 @@ export interface ToolCallContext {
   tool: string;
   args: unknown;
   toolCallId?: string;
-  run: { id: string; threadId: string; userId: string; initiator: "user" | "routine" | "trigger" };
+  run: { id: string; threadId: string; userId: string; initiator: "user" | "routine" | "trigger" | "room" };
   humanInControl?: boolean;
 }
 
@@ -95,7 +95,7 @@ export async function evaluateToolCall(
     runId: call.run.id,
     threadId: call.run.threadId,
     userId: call.run.userId,
-    initiator: call.run.initiator === "user" ? "user" : "routine",
+    initiator: call.run.initiator === "user" ? "user" : call.run.initiator === "room" ? "room" : "routine",
     humanInControl: call.humanInControl,
   });
 

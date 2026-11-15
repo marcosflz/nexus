@@ -62,3 +62,60 @@ class DockerClient:
             "GET", "/containers/json", params={"all": "false", "filters": json.dumps({"label": [label]})}
         )
         return response.json()
+
+    # --- Redes (solo las usan los NexBots) -----------------------------------
+
+    async def list_networks(self, label: str) -> list[dict[str, Any]]:
+        import json
+
+        response = await self._request("GET", "/networks", params={"filters": json.dumps({"label": [label]})})
+        return response.json()
+
+    async def inspect_network(self, name: str) -> dict[str, Any] | None:
+        response = await self._http.get(f"/networks/{name}")
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise DockerError(f"inspect network {name} → HTTP {response.status_code}")
+        return response.json()
+
+    async def create_network(self, name: str, spec: dict[str, Any]) -> None:
+        await self._request("POST", "/networks/create", json={"Name": name, **spec})
+
+    async def connect(self, network: str, container: str) -> None:
+        response = await self._http.post(f"/networks/{network}/connect", json={"Container": container})
+        # 403 con «already exists»: el contenedor ya estaba en esa red.
+        if response.status_code == 200 or "already exists" in response.text:
+            return
+        raise DockerError(f"connect {container} → HTTP {response.status_code}: {response.text[:200]}")
+
+    async def disconnect(self, network: str, container: str) -> None:
+        response = await self._http.post(f"/networks/{network}/disconnect", json={"Container": container, "Force": True})
+        if response.status_code in (200, 404):
+            return
+        # Desconectar algo que no estaba conectado no es un fallo. Docker lo responde con
+        # 403 o con 500 según la versión; tratarlo como error abortaba el borrado del bot
+        # y dejaba su red y su volumen huérfanos.
+        if "not connected" in response.text.lower():
+            return
+        raise DockerError(f"POST /networks/{network}/disconnect → HTTP {response.status_code}: {response.text[:200]}")
+
+    async def remove_network(self, name: str) -> None:
+        await self._request("DELETE", f"/networks/{name}", ok=(204, 404))
+
+    async def logs(self, name: str, tail: int = 200) -> str:
+        response = await self._request(
+            "GET", f"/containers/{name}/logs", params={"stdout": 1, "stderr": 1, "tail": tail}
+        )
+        return demux(response.content)
+
+
+def demux(raw: bytes) -> str:
+    """Quita la cabecera de 8 bytes con la que Docker multiplexa stdout y stderr."""
+    out = bytearray()
+    index = 0
+    while index + 8 <= len(raw) and raw[index] in (0, 1, 2):
+        size = int.from_bytes(raw[index + 4 : index + 8], "big")
+        out += raw[index + 8 : index + 8 + size]
+        index += 8 + size
+    return (out if out or not raw else raw).decode("utf-8", "replace")

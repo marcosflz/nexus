@@ -66,10 +66,10 @@ export function PreferencesSection() {
           </Select>
         </SettingsRow>
         <SettingsRow
-          label="Interfaz generativa"
-          description="Responder con tablas, gráficos y formularios cuando aporten."
+          label="Forzar interfaz generativa"
+          description="El asistente ya usa tablas y gráficos cuando aportan. Actívalo solo si quieres una interfaz en todas las respuestas."
         >
-          <Switch checked={prefs.ui} onCheckedChange={(ui) => update({ ui })} aria-label="Interfaz generativa" />
+          <Switch checked={prefs.ui} onCheckedChange={(ui) => update({ ui })} aria-label="Forzar interfaz generativa" />
         </SettingsRow>
       </SettingsGroup>
       <p className="text-muted-fg text-[13px]">Estas preferencias se guardan en este navegador.</p>

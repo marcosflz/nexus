@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createSession, sessionCookieOptions, SESSION_COOKIE } from "@/lib/auth";
+import { clientMeta, createSession, sessionCookieOptions, SESSION_COOKIE } from "@/lib/auth";
 import { createFirstAdmin } from "@/lib/users";
 
 export const runtime = "nodejs";
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { token, expiresAt } = await createSession(user.id);
+  const { token, expiresAt } = await createSession(user.id, clientMeta(req));
   const res = NextResponse.json({ user }, { status: 201 });
   res.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(req, expiresAt));
   return res;

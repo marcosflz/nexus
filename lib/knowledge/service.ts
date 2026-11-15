@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { knowledgeChunks, knowledgeFiles } from "@/lib/db/schema";
+import { botKnowledgeChunks as knowledgeChunks, botKnowledgeFiles as knowledgeFiles } from "@/lib/db/schema";
 import { extractAttachment } from "@/lib/extract";
 import { chunkText } from "./chunk";
 import { buildOrQuery } from "./query";
@@ -14,29 +14,29 @@ export type IndexResult =
   | { ok: true; fileId: string; chunks: number; duplicate: boolean }
   | { ok: false; error: string };
 
-/** Extrae, trocea e indexa un archivo en la base de conocimiento de un agente. */
+/** Extrae, trocea e indexa un archivo en la base de conocimiento de un Nexbot. */
 export async function indexKnowledgeFile(params: {
   ownerId: string;
-  agentId: string;
+  botId: string;
   file: File;
 }): Promise<IndexResult> {
-  const { ownerId, agentId, file } = params;
+  const { ownerId, botId, file } = params;
   const bytes = Buffer.from(await file.arrayBuffer());
   const sha256 = createHash("sha256").update(bytes).digest("hex");
 
   const [existing] = await db
     .select({ id: knowledgeFiles.id })
     .from(knowledgeFiles)
-    .where(and(eq(knowledgeFiles.agentId, agentId), eq(knowledgeFiles.sha256, sha256)))
+    .where(and(eq(knowledgeFiles.botId, botId), eq(knowledgeFiles.sha256, sha256)))
     .limit(1);
   if (existing) return { ok: true, fileId: existing.id, chunks: 0, duplicate: true };
 
   const [{ count }] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(knowledgeFiles)
-    .where(eq(knowledgeFiles.agentId, agentId));
+    .where(eq(knowledgeFiles.botId, botId));
   if (count >= MAX_KNOWLEDGE_FILES) {
-    return { ok: false, error: `Un agente admite como máximo ${MAX_KNOWLEDGE_FILES} archivos` };
+    return { ok: false, error: `Un Nexbot admite como máximo ${MAX_KNOWLEDGE_FILES} archivos` };
   }
 
   let text: string;
@@ -56,9 +56,9 @@ export async function indexKnowledgeFile(params: {
   const [{ total }] = await db
     .select({ total: sql<number>`count(*)::int` })
     .from(knowledgeChunks)
-    .where(eq(knowledgeChunks.agentId, agentId));
+    .where(eq(knowledgeChunks.botId, botId));
   if (total + chunks.length > MAX_CHUNKS_PER_AGENT) {
-    return { ok: false, error: "La base de conocimiento de este agente está llena" };
+    return { ok: false, error: "La base de conocimiento de este Nexbot está llena" };
   }
 
   const fileId = await db.transaction(async (tx) => {
@@ -66,7 +66,7 @@ export async function indexKnowledgeFile(params: {
       .insert(knowledgeFiles)
       .values({
         ownerId,
-        agentId,
+        botId,
         name,
         mime,
         size: bytes.length,
@@ -79,7 +79,7 @@ export async function indexKnowledgeFile(params: {
       await tx.insert(knowledgeChunks).values(
         chunks.slice(start, start + 200).map((content, index) => ({
           fileId: row.id,
-          agentId,
+          botId,
           ordinal: start + index,
           content,
         })),
@@ -98,9 +98,9 @@ export interface KnowledgeHit {
   rank: number;
 }
 
-/** Fragmentos del agente que mejor responden a una pregunta (texto completo, OR + prefijo). */
+/** Fragmentos del Nexbot que mejor responden a una pregunta (texto completo, OR + prefijo). */
 export async function searchKnowledge(
-  agentId: string,
+  botId: string,
   question: string,
   topK: number,
 ): Promise<KnowledgeHit[]> {
@@ -116,10 +116,10 @@ export async function searchKnowledge(
     rank: number;
   }>(sql`
     SELECT c.file_id, f.name, c.ordinal, c.content, ts_rank_cd(c.tsv, q) AS rank
-    FROM knowledge_chunks c
-    JOIN knowledge_files f ON f.id = c.file_id
+    FROM bot_knowledge_chunks c
+    JOIN bot_knowledge_files f ON f.id = c.file_id
     CROSS JOIN to_tsquery('simple', ${query}) q
-    WHERE c.agent_id = ${agentId} AND c.tsv @@ q
+    WHERE c.bot_id = ${botId} AND c.tsv @@ q
     ORDER BY rank DESC, c.ordinal
     LIMIT ${limit}`);
 
@@ -132,7 +132,7 @@ export async function searchKnowledge(
   }));
 }
 
-export async function listKnowledgeFiles(agentId: string) {
+export async function listKnowledgeFiles(botId: string) {
   return db
     .select({
       id: knowledgeFiles.id,
@@ -143,24 +143,24 @@ export async function listKnowledgeFiles(agentId: string) {
       createdAt: knowledgeFiles.createdAt,
     })
     .from(knowledgeFiles)
-    .where(eq(knowledgeFiles.agentId, agentId))
+    .where(eq(knowledgeFiles.botId, botId))
     .orderBy(knowledgeFiles.createdAt);
 }
 
-export async function deleteKnowledgeFile(agentId: string, fileId: string): Promise<boolean> {
+export async function deleteKnowledgeFile(botId: string, fileId: string): Promise<boolean> {
   const removed = await db
     .delete(knowledgeFiles)
-    .where(and(eq(knowledgeFiles.id, fileId), eq(knowledgeFiles.agentId, agentId)))
+    .where(and(eq(knowledgeFiles.id, fileId), eq(knowledgeFiles.botId, botId)))
     .returning({ id: knowledgeFiles.id });
   return removed.length > 0;
 }
 
 /** Texto completo de un archivo, para enseñar la fuente de una cita. */
-export async function readKnowledgeFile(agentId: string, fileId: string) {
+export async function readKnowledgeFile(botId: string, fileId: string) {
   const [file] = await db
     .select({ name: knowledgeFiles.name })
     .from(knowledgeFiles)
-    .where(and(eq(knowledgeFiles.id, fileId), eq(knowledgeFiles.agentId, agentId)))
+    .where(and(eq(knowledgeFiles.id, fileId), eq(knowledgeFiles.botId, botId)))
     .limit(1);
   if (!file) return null;
   const chunks = await db

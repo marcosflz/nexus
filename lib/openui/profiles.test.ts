@@ -52,3 +52,14 @@ describe("perfiles de OpenUI", () => {
     expect(profileFor({ userToggle: true, focus: "finance" })).toBe("full");
   });
 });
+
+describe("UI generativa en modo auto", () => {
+  it("usa el perfil de la instancia salvo que se pida la UI expresamente", async () => {
+    const { openuiToolsEnabled } = await import("./prompt");
+    expect(profileFor({ autoProfile: "data" })).toBe("data");
+    expect(profileFor({ autoProfile: "lists", focus: "finance" })).toBe("lists");
+    expect(profileFor({ autoProfile: "data", userToggle: true })).toBe("full");
+    expect(profileFor({})).toBe("minimal");
+    expect(openuiToolsEnabled({ auto: true })).toBe(openuiToolsEnabled({ userToggle: true }));
+  });
+});

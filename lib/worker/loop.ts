@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { launchRoutineRun, maxConcurrentRuns } from "@/lib/runs/routine";
 import { activeRunCount } from "@/lib/runs/registry";
+import { dispatchAllRooms } from "@/lib/rooms/engine";
 import { pollTrigger } from "@/lib/triggers/poll";
 import { scheduleDueTriggers } from "@/lib/triggers/service";
 import { claimJobs, completeJob, deferJob, failJob, reclaimStaleJobs, type JobRow } from "./jobs";
@@ -19,9 +20,9 @@ export async function handleJob(job: JobRow): Promise<"done" | "defer"> {
     return "done";
   }
 
-  if (job.kind === "agent_run") {
+  if (job.kind === "bot_run") {
     const outcome = await launchRoutineRun({
-      agentId: String(payload.agentId),
+      botId: String(payload.botId),
       triggerId: typeof payload.triggerId === "string" ? payload.triggerId : null,
       prompt: String(payload.prompt ?? ""),
       context: typeof payload.context === "string" ? payload.context : undefined,
@@ -85,6 +86,8 @@ export function startWorker(options: { tickMs?: number; workerId?: string } = {}
       const failures = await runStages([
         ["reclamar trabajos huérfanos", () => reclaimStaleJobs()],
         ["planificar disparadores", () => scheduleDueTriggers()],
+        // Turnos de sala que esperaban hueco, a su bot o a que el servidor volviese.
+        ["despachar salas de NexBots", () => dispatchAllRooms()],
         [
           "ejecutar trabajos",
           async () => {

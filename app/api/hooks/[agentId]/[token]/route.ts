@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { agents, agentTriggers } from "@/lib/db/schema";
+import { bots as agents, botTriggers as agentTriggers } from "@/lib/db/schema";
 import { MAX_HOOK_BODY_BYTES, RateLimiter, verifyHookToken, wrapUntrusted } from "@/lib/triggers/hooks";
 import { enqueueJob } from "@/lib/worker/jobs";
 
@@ -49,15 +49,15 @@ export async function POST(req: NextRequest, context: RouteContext) {
   const triggers = await db
     .select({ trigger: agentTriggers, status: agents.status })
     .from(agentTriggers)
-    .innerJoin(agents, eq(agents.id, agentTriggers.agentId))
+    .innerJoin(agents, eq(agents.id, agentTriggers.botId))
     .where(
-      and(eq(agentTriggers.agentId, agentId), eq(agentTriggers.kind, "webhook"), eq(agentTriggers.enabled, true)),
+      and(eq(agentTriggers.botId, agentId), eq(agentTriggers.kind, "webhook"), eq(agentTriggers.enabled, true)),
     );
   const match = triggers.find(({ trigger }) => {
     const hash = (trigger.config as { tokenHash?: string }).tokenHash;
     return hash ? verifyHookToken(token, hash) : false;
   });
-  if (!match || match.status !== "active") return notFound();
+  if (!match || match.status === "error") return notFound();
 
   if (!perAgent.allow(agentId)) return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
 
@@ -65,9 +65,9 @@ export async function POST(req: NextRequest, context: RouteContext) {
   if (body === null) return NextResponse.json({ error: "Cuerpo demasiado grande" }, { status: 413 });
 
   await enqueueJob({
-    kind: "agent_run",
+    kind: "bot_run",
     payload: {
-      agentId,
+      botId: agentId,
       triggerId: match.trigger.id,
       prompt: match.trigger.prompt || "Ha llegado un evento por webhook. Analízalo y actúa según tus instrucciones.",
       context: wrapUntrusted("webhook", body),

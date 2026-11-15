@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  MessagesSquare,
   BarChart3,
   Bell,
   Bot,
   ChevronDown,
+  Cpu,
   Folder,
   FolderPlus,
   MoreHorizontal,
@@ -16,7 +18,10 @@ import {
   Plus,
   Search,
   Trash2,
+  Users,
+  Loader2,
 } from "lucide-react";
+import { NewRoomDialog } from "@/components/bots/bots-page";
 import { NexusLogo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -45,6 +50,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ProjectSummary, ThreadSummary } from "@/components/chat/types";
+import { isAdminRole } from "@/lib/access";
 import { splitThreads } from "@/lib/threads/sections";
 import { cn } from "@/lib/utils";
 import { useShell } from "./shell-context";
@@ -56,8 +62,8 @@ const ROW =
 const NAV_ROW = `${ROW} h-10 text-[15px]`;
 
 const SECTIONS_KEY = "nexus.sidebar.sections";
-type SectionState = { pinned: boolean; projects: boolean; recent: boolean };
-const DEFAULT_SECTIONS: SectionState = { pinned: true, projects: true, recent: true };
+type SectionState = { pinned: boolean; rooms: boolean; projects: boolean; recent: boolean };
+const DEFAULT_SECTIONS: SectionState = { pinned: true, rooms: true, projects: true, recent: true };
 
 function useSectionState() {
   const [state, setState] = useState<SectionState>(DEFAULT_SECTIONS);
@@ -81,6 +87,100 @@ function useSectionState() {
       return next;
     });
   return [state, set] as const;
+}
+
+interface RoomLink {
+  id: string;
+  name: string;
+  openTopics: number;
+}
+
+/** Quien crea, renombra o borra una sala lo anuncia con este evento para refrescar la barra. */
+export const ROOMS_CHANGED = "nexus:rooms-changed";
+
+/** Salas de NexBots, junto a los chats pero en su propia sección. */
+function RoomsSection({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const [rooms, setRooms] = useState<RoomLink[] | null>(null);
+  const [creating, setCreating] = useState<{ id: string; name: string; description: string; status: string; lastError: string | null }[] | null>(null);
+  const inRooms = pathname.startsWith("/bots");
+
+  const load = useCallback(async () => {
+    const res = await fetch("/api/rooms").catch(() => null);
+    if (res?.ok) setRooms(((await res.json()) as { rooms: RoomLink[] }).rooms);
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga desde la API
+    void load();
+    window.addEventListener(ROOMS_CHANGED, load);
+    return () => window.removeEventListener(ROOMS_CHANGED, load);
+    // Se recarga al entrar o salir de NexBots: ahí es donde cambian las salas.
+  }, [load, inRooms]);
+
+  async function startCreating() {
+    const res = await fetch("/api/bots").catch(() => null);
+    setCreating(res?.ok ? ((await res.json()) as { bots: NonNullable<typeof creating> }).bots : []);
+  }
+
+  return (
+    <>
+      <Section
+        label="Salas"
+        open={open}
+        onOpenChange={onOpenChange}
+        action={
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Nueva sala"
+            onClick={() => void startCreating()}
+            className="opacity-0 transition-opacity group-hover/section:opacity-100 focus-visible:opacity-100"
+          >
+            <Plus />
+          </Button>
+        }
+      >
+        {rooms === null ? null : rooms.length === 0 ? (
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={() => void startCreating()} className={cn(ROW, "text-muted-fg")}>
+              <MessagesSquare />
+              Nueva sala
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ) : (
+          rooms.map((room) => (
+            <SidebarMenuItem key={room.id}>
+              <SidebarMenuButton asChild isActive={pathname === `/bots/salas/${room.id}`} className={ROW}>
+                <Link href={`/bots/salas/${room.id}`}>
+                  <MessagesSquare />
+                  <span className="truncate">{room.name}</span>
+                  {room.openTopics > 0 ? (
+                    <span className="text-muted-fg ml-auto text-[12px]" title="Tareas abiertas">
+                      {room.openTopics}
+                    </span>
+                  ) : null}
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))
+        )}
+      </Section>
+      {creating ? (
+        <NewRoomDialog
+          bots={creating}
+          open
+          onOpenChange={(value) => !value && setCreating(null)}
+          onCreated={(roomId) => {
+            setCreating(null);
+            void load();
+            router.push(`/bots/salas/${roomId}`);
+          }}
+        />
+      ) : null}
+    </>
+  );
 }
 
 function Section({
@@ -116,6 +216,31 @@ function Section({
   );
 }
 
+/** Spinner mientras se genera la respuesta; punto cuando terminó sin que se estuviera mirando. */
+function ThreadStatus({ id }: { id: string }) {
+  const { runningThreadIds, unreadThreadIds } = useShell();
+  if (runningThreadIds.includes(id)) {
+    return (
+      <Loader2
+        className="text-muted-fg ml-auto size-3.5 shrink-0 animate-spin"
+        role="status"
+        aria-label="Generando respuesta"
+      />
+    );
+  }
+  if (unreadThreadIds.includes(id)) {
+    return (
+      <span
+        className="bg-brand ml-auto size-2 shrink-0 rounded-full"
+        role="status"
+        aria-label="Respuesta nueva"
+        title="Respuesta nueva"
+      />
+    );
+  }
+  return null;
+}
+
 function ThreadItem({ thread }: { thread: ThreadSummary }) {
   const { currentThreadId, selectThread } = useShell();
   const pathname = usePathname();
@@ -128,6 +253,7 @@ function ThreadItem({ thread }: { thread: ThreadSummary }) {
         className={ROW}
       >
         <span className="truncate">{thread.title}</span>
+        <ThreadStatus id={thread.id} />
       </SidebarMenuButton>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -194,6 +320,7 @@ function ProjectItem({
                 className="h-8 cursor-pointer text-[13.5px]"
               >
                 <span className="truncate">{t.title}</span>
+                <ThreadStatus id={t.id} />
               </SidebarMenuSubButton>
             </SidebarMenuSubItem>
           ))}
@@ -307,20 +434,34 @@ export function AppSidebar() {
                 <kbd className="text-muted-fg ml-auto hidden text-[11px] group-hover/menu-button:inline">Ctrl ⇧ O</kbd>
               </SidebarMenuButton>
             </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild tooltip="Agentes" isActive={pathname.startsWith("/agents")} className={NAV_ROW}>
-                <Link href="/agents">
-                  <Bot />
-                  <span>Agentes</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton tooltip="Conectores" onClick={() => shell.openSettings("connectors")} className={NAV_ROW}>
-                <Plug />
-                <span>Conectores</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
+            {shell.user.permissions.skills ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild tooltip="Skills" isActive={pathname.startsWith("/skills")} className={NAV_ROW}>
+                  <Link href="/skills">
+                    <Bot />
+                    <span>Skills</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
+            {shell.user.permissions.bots ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild tooltip="NexBots" isActive={pathname.startsWith("/bots") && !pathname.startsWith("/bots/salas")} className={NAV_ROW}>
+                  <Link href="/bots">
+                    <Cpu />
+                    <span>NexBots</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
+            {shell.user.permissions.connectors ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton tooltip="Conectores" onClick={() => shell.openSettings("connectors")} className={NAV_ROW}>
+                  <Plug />
+                  <span>Conectores</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
             <SidebarMenuItem>
               <SidebarMenuButton asChild tooltip="Uso" isActive={pathname === "/usage"} className={NAV_ROW}>
                 <Link href="/usage">
@@ -329,6 +470,16 @@ export function AppSidebar() {
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {isAdminRole(shell.user.role) ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild tooltip="Usuarios" isActive={pathname.startsWith("/admin/users")} className={NAV_ROW}>
+                  <Link href="/admin/users">
+                    <Users />
+                    <span>Usuarios</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
           </SidebarMenu>
         </SidebarGroup>
 
@@ -339,6 +490,8 @@ export function AppSidebar() {
             ))}
           </Section>
         ) : null}
+
+        {shell.user.permissions.bots ? <RoomsSection open={open.rooms} onOpenChange={(v) => setOpen("rooms", v)} /> : null}
 
         <Section
           label="Proyectos"

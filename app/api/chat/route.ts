@@ -1,15 +1,19 @@
+import { resolveTurnModel } from "@/lib/models/choice";
+import { resolveBotMention } from "@/lib/bots/chat";
+import { botMessageDeps } from "@/lib/rooms/engine";
 import { NextRequest } from "next/server";
 import { and, eq, gte, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { messages, threads, type MessageAttachmentMeta } from "@/lib/db/schema";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, permissionDenied } from "@/lib/auth";
+import { hasPermission } from "@/lib/access";
 import { BACKEND_UNAVAILABLE, getBackend, isBackendAvailable } from "@/lib/agents/registry";
-import { checkAgentBudget } from "@/lib/agents/budget";
-import { selectAgent } from "@/lib/agents/select";
+import { checkBotBudget } from "@/lib/agents/budget";
 import { connectorsForRun } from "@/lib/connectors/store";
 import { defaultAgentSpec } from "@/lib/agents/spec";
 import { openuiToolsEnabled, profileFor } from "@/lib/openui/prompt";
+import { assistantSettings } from "@/lib/instance/assistant";
 import { buildHistory, launchResume, loadCredential, resumeEntrySchema } from "@/lib/runs/launch";
 import { createRun } from "@/lib/runs/store";
 import { sseResponse } from "@/lib/runs/sse";
@@ -34,9 +38,12 @@ const turnSchema = z.object({
   /** El usuario ha pedido expresamente una respuesta con interfaz. */
   ui: z.boolean().optional(),
   /** Agente que atiende este turno (se recuerda en el hilo). También vale `@slug` al inicio. */
-  agentId: z.string().uuid().optional(),
+  botId: z.string().uuid().nullable().optional(),
+  explicitSkills: z.array(z.string().max(200)).max(20).optional(),
   /** Editar o regenerar: el mensaje de usuario que se reemplaza (y todo lo posterior). */
   replace: z.object({ messageId: z.string().uuid() }).optional(),
+  /** Modelo elegido en el selector del chat. Solo se usa si el agente no fija uno. */
+  model: z.object({ provider: z.string().min(1).max(60), model: z.string().min(1).max(200) }).optional(),
 });
 
 /** Respuesta a un run en pausa (formulario o aprobación). */
@@ -46,8 +53,6 @@ const resumeSchema = z.object({
     entries: z.array(resumeEntrySchema).min(1).max(20),
   }),
 });
-
-const RESEARCH_MAX_TURNS = 40;
 
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
@@ -72,7 +77,13 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return Response.json({ error: "Petición no válida" }, { status: 400 });
   }
-  const { threadId, text, focus, mode, attachments = [], ui, replace, agentId } = parsed.data;
+  const { threadId, text, focus, mode, attachments = [], ui, replace, botId, explicitSkills, model: chosenModel } = parsed.data;
+
+  const denied =
+    (mode === "research" ? permissionDenied(user, "research") : null) ??
+    (ui === true ? permissionDenied(user, "generativeUi") : null) ??
+    (attachments.length > 0 ? permissionDenied(user, "attachments") : null);
+  if (denied) return denied;
 
   const [thread] = await db
     .select()
@@ -82,29 +93,37 @@ export async function POST(req: NextRequest) {
   if (!thread) {
     return Response.json({ error: "Hilo no encontrado" }, { status: 404 });
   }
+  // Un hilo de sala solo se mueve por su sala: aquí correría sin confinar al bot.
+  if (thread.origin === "room" || thread.origin === "skill_creator") {
+    return Response.json({ error: "Este hilo pertenece a una sala de NexBots" }, { status: 400 });
+  }
 
-  const selection = await selectAgent(user.id, {
-    text,
-    explicitId: agentId,
-    threadAgentId: thread.agentId,
-  });
-  if (!selection.ok) return Response.json({ error: selection.error }, { status: selection.status });
-  const agent = selection.agent;
-  const turnText = selection.text;
-  const spec = agent?.spec ?? defaultAgentSpec();
+  // `@bot …` da este turno a un NexBot del usuario, confinado a su contenedor.
+  const botTurn = await resolveBotMention(user.id, text, botId === undefined ? thread.botId : botId);
+  if (botTurn) {
+    const botDenied = permissionDenied(user, "bots");
+    if (botDenied) return botDenied;
+    if (!botTurn.ok) return Response.json({ error: botTurn.error, code: "bot_unavailable" }, { status: botTurn.status });
+  }
+  const bot = botTurn?.ok ? botTurn : null;
+
+  const turnText = bot?.text ?? text;
+  const spec = bot?.spec ?? defaultAgentSpec();
+  const runAgent = { id: null, versionId: null };
 
   if (!isBackendAvailable()) {
     return Response.json({ error: BACKEND_UNAVAILABLE, code: "backend_unavailable" }, { status: 503 });
   }
 
-  if (agent) {
-    const budget = await checkAgentBudget(agent.agent.id, spec, user.id);
+  if (bot) {
+    const budget = await checkBotBudget(bot.bot.id, spec, user.id);
     if (!budget.ok) {
       return Response.json({ error: budget.reason, code: "budget_exceeded" }, { status: 429 });
     }
   }
 
-  const credential = await loadCredential(user.id, spec.model.provider);
+  const turnModel = resolveTurnModel(spec.model, bot ? null : chosenModel);
+  const credential = await loadCredential(user.id, turnModel.provider, turnModel.model);
   if (!credential.ok) {
     return Response.json({ error: credential.error, code: credential.code }, { status: credential.status });
   }
@@ -155,7 +174,7 @@ export async function POST(req: NextRequest) {
     .set({
       ...(thread.title === "Nuevo chat" ? { title: text.slice(0, 60) } : {}),
       ...(thread.backend !== "nas-adk" ? { backend: "nas-adk" } : {}),
-      ...(selection.explicit && agent && thread.agentId !== agent.agent.id ? { agentId: agent.agent.id } : {}),
+      botId: bot?.bot.id ?? null,
       updatedAt: new Date(),
     })
     .where(eq(threads.id, threadId));
@@ -164,10 +183,22 @@ export async function POST(req: NextRequest) {
   const run = await createRun(threadId, user.id, turnText, {
     initiator: "user",
     backend: backend.id,
-    agentId: agent?.agent.id ?? null,
-    agentVersionId: agent?.versionId ?? null,
+    agentId: runAgent.id,
+    agentVersionId: runAgent.versionId,
+    botId: bot?.bot.id ?? null,
   });
   const wantsUi = ui === true;
+
+  const assistant = await assistantSettings();
+  // En modo auto la UI se ofrece siempre (si la cuenta puede usarla) y el prompt dice cuándo usarla.
+  const autoUi = assistant.ui.mode === "auto" && hasPermission(user, "generativeUi");
+  const openuiContext = {
+    focus,
+    mode,
+    userToggle: wantsUi,
+    auto: autoUi,
+    autoProfile: autoUi && mode !== "research" ? assistant.ui.profile : null,
+  };
 
   // El run vive por su cuenta: cerrar la pestaña no lo aborta y se puede
   // volver a seguir con GET /api/runs/:id/events?after=<seq>.
@@ -176,20 +207,22 @@ export async function POST(req: NextRequest) {
     threadId,
     userId: user.id,
     initiator: "user",
-    credential: { ...credential.value, model: spec.model.model || credential.value.model },
+    credential: credential.value,
     userText: turnText,
     attachments: attachments.map(({ name, text: content }) => ({ name, text: content })),
     focus,
     mode,
-    openui: openuiToolsEnabled({ focus, mode, userToggle: wantsUi }),
-    openuiProfile: profileFor({ focus, mode, userToggle: wantsUi }),
+    openui: openuiToolsEnabled(openuiContext),
+    openuiProfile: profileFor(openuiContext),
     openuiRequested: wantsUi,
-    limits: mode === "research" ? { maxTurns: RESEARCH_MAX_TURNS } : undefined,
-    agent: { id: agent?.agent.id ?? null, versionId: agent?.versionId ?? null, spec },
-    connectors: (await connectorsForRun(user.id, agent?.agent.id ?? null, spec)).links,
+    limits: { maxTurns: mode === "research" ? assistant.limits.researchMaxTurns : assistant.limits.maxTurns },
+    agent: { ...runAgent, spec },
+    botVersionId: bot?.botVersionId,
+    connectors: [...(await connectorsForRun(user.id, null, spec)).links, ...(bot?.link ? [bot.link] : [])],
+    explicitSkills,
     // El motor no guarda sesión: cada turno recibe el historial del hilo.
     history: await buildHistory(threadId, userMessage.id),
-  });
+  }, bot ? botMessageDeps(bot.bot.id) : undefined);
 
   // El cliente necesita el id del mensaje guardado para poder editarlo o regenerarlo.
   return sseResponse(run.id, user.id, 0, req.signal, { "X-Nexus-User-Message": userMessage.id });

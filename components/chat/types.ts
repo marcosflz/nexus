@@ -4,6 +4,8 @@ export interface ThreadSummary {
   updatedAt: string;
   pinnedAt: string | null;
   projectId: string | null;
+  /** Hay una respuesta generándose en el servidor. */
+  running?: boolean;
 }
 
 export interface ProjectSummary {
@@ -109,6 +111,8 @@ export interface UiMessage {
   parts?: UiPart[];
   /** Preguntas de seguimiento propuestas por el agente. */
   followups?: string[];
+  /** Razonamiento (o su resumen) que publicó el modelo. No es parte de la respuesta. */
+  reasoning?: string;
   subagents?: UiSubagent[];
   interrupts?: UiInterrupt[];
 }

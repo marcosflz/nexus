@@ -3,6 +3,7 @@ import { authenticateInternal } from "@/lib/internal/auth";
 import { evaluateToolCall } from "@/lib/policy/gateway";
 import { defaultGatewayDeps } from "@/lib/policy/deps";
 import { isHumanInControl } from "@/lib/sandbox/control";
+import { decideRuntimeAction } from "@/lib/policy/runtime";
 
 export const runtime = "nodejs";
 
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
       run: auth.run,
       humanInControl: await isHumanInControl(auth.run.agentId),
     },
-    defaultGatewayDeps,
+    { ...defaultGatewayDeps, decide: (request) => decideRuntimeAction(request, auth.run.runtimeSnapshot?.spec) },
   );
   return Response.json(verdict);
 }

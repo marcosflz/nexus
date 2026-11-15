@@ -11,6 +11,8 @@
  * donde una respuesta rica aporta de verdad; ver `openuiToolsEnabled()`.
  */
 import { openuiChatLibrary, openuiChatPromptOptions } from "@openuidev/react-ui/genui-lib";
+import { unwrapOpenUiProgram } from "./blocks";
+import { argumentOrderOf, positionalArguments, type ArgumentOrder } from "./named-args";
 
 // OJO: se importa de `/genui-lib`, no de la raíz del paquete. La raíz lleva
 // "use client", y desde el servidor de Next (rutas /api, prompts, validación)
@@ -22,3 +24,15 @@ export const nexusPromptOptions = openuiChatPromptOptions;
 
 /** Componente raíz que el modelo debe usar (`root = Card([...])`). */
 export const OPENUI_ROOT = nexusLibrary.root ?? "Card";
+
+let argumentOrder: ArgumentOrder | null = null;
+
+/**
+ * Programa tal y como se valida y se pinta: sin el bloque cercado y con los
+ * argumentos con nombre pasados a posicionales. Servidor y navegador aplican
+ * lo mismo, así que lo que el validador da por bueno es lo que se ve.
+ */
+export function normalizeOpenUiProgram(ui: string): string {
+  argumentOrder ??= argumentOrderOf(nexusLibrary.toJSONSchema());
+  return positionalArguments(unwrapOpenUiProgram(ui), argumentOrder);
+}

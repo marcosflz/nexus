@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 interface Trigger {
   id: string;
-  kind: "cron" | "webhook" | "rss" | "watch" | "agent_completed";
+  kind: "cron" | "webhook" | "rss" | "watch" | "bot_completed";
   name: string;
   prompt: string;
   config: Record<string, unknown>;
@@ -28,7 +28,7 @@ const KIND_LABEL: Record<Trigger["kind"], string> = {
   webhook: "Webhook entrante",
   rss: "Feed RSS / Atom",
   watch: "Vigilar una página",
-  agent_completed: "Cuando otro agente termina",
+  bot_completed: "Cuando otro Nexbot termina",
 };
 
 function describe(trigger: Trigger): string {
@@ -41,8 +41,8 @@ function describe(trigger: Trigger): string {
       return `${c.url} · cada ${c.intervalMin} min`;
     case "webhook":
       return "POST a la URL secreta del webhook";
-    case "agent_completed":
-      return "Se dispara al terminar el agente elegido";
+    case "bot_completed":
+      return "Se dispara al terminar el Nexbot elegido";
   }
 }
 
@@ -62,16 +62,16 @@ export function TriggersPanel({ agentId, canEdit }: { agentId: string; canEdit: 
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/agents/${agentId}/triggers`);
+    const res = await fetch(`/api/bots/${agentId}/triggers`);
     if (res.ok) setTriggers(((await res.json()) as { triggers: Trigger[] }).triggers);
   }, [agentId]);
 
   useEffect(() => {
     void load();
-    fetch("/api/agents")
-      .then((res) => (res.ok ? res.json() : { agents: [] }))
-      .then((data: { agents: { id: string; name: string; mine: boolean }[] }) =>
-        setAgents(data.agents.filter((agent) => agent.mine && agent.id !== agentId)),
+    fetch("/api/bots")
+      .then((res) => (res.ok ? res.json() : { bots: [] }))
+      .then((data: { bots: { id: string; name: string; mine: boolean }[] }) =>
+        setAgents(data.bots.filter((agent) => agent.id !== agentId)),
       )
       .catch(() => {});
   }, [load, agentId]);
@@ -79,9 +79,9 @@ export function TriggersPanel({ agentId, canEdit }: { agentId: string; canEdit: 
   async function create() {
     setBusy(true);
     const config =
-      kind === "cron" ? { expr, tz } : kind === "rss" || kind === "watch" ? { url, intervalMin } : kind === "agent_completed" ? { sourceAgentId: source } : {};
+      kind === "cron" ? { expr, tz } : kind === "rss" || kind === "watch" ? { url, intervalMin } : kind === "bot_completed" ? { sourceBotId: source } : {};
     try {
-      const res = await fetch(`/api/agents/${agentId}/triggers`, {
+      const res = await fetch(`/api/bots/${agentId}/triggers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind, name, prompt, config }),
@@ -101,7 +101,7 @@ export function TriggersPanel({ agentId, canEdit }: { agentId: string; canEdit: 
   }
 
   async function toggle(trigger: Trigger, enabled: boolean) {
-    const res = await fetch(`/api/agents/${agentId}/triggers/${trigger.id}`, {
+    const res = await fetch(`/api/bots/${agentId}/triggers/${trigger.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }),
@@ -111,13 +111,13 @@ export function TriggersPanel({ agentId, canEdit }: { agentId: string; canEdit: 
   }
 
   async function remove(trigger: Trigger) {
-    const res = await fetch(`/api/agents/${agentId}/triggers/${trigger.id}`, { method: "DELETE" });
+    const res = await fetch(`/api/bots/${agentId}/triggers/${trigger.id}`, { method: "DELETE" });
     if (!res.ok) toast.error("No se pudo eliminar");
     await load();
   }
 
   async function runAgentNow() {
-    const res = await fetch(`/api/agents/${agentId}/run`, {
+    const res = await fetch(`/api/bots/${agentId}/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: runNow }),
@@ -134,7 +134,7 @@ export function TriggersPanel({ agentId, canEdit }: { agentId: string; canEdit: 
         <div className="space-y-2 border-border bg-surface rounded-xl border p-4">
           <h3 className="text-sm font-medium">Ejecutar ahora</h3>
           <div className="flex gap-2">
-            <Input value={runNow} onChange={(e) => setRunNow(e.target.value)} placeholder="Qué tiene que hacer el agente" />
+            <Input value={runNow} onChange={(e) => setRunNow(e.target.value)} placeholder="Qué tiene que hacer el Nexbot" />
             <Button onClick={runAgentNow} disabled={!runNow.trim()}>
               <Play className="size-4" /> Lanzar
             </Button>
@@ -230,11 +230,11 @@ export function TriggersPanel({ agentId, canEdit }: { agentId: string; canEdit: 
               </div>
             </div>
           ) : null}
-          {kind === "agent_completed" ? (
+          {kind === "bot_completed" ? (
             <div className="space-y-1.5">
               <Label>Agente que se espera</Label>
               <Select value={source} onValueChange={setSource}>
-                <SelectTrigger><SelectValue placeholder="Elige uno de tus agentes" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Elige uno de tus Nexbots" /></SelectTrigger>
                 <SelectContent>
                   {agents.map((agent) => (
                     <SelectItem key={agent.id} value={agent.id}>{agent.name}</SelectItem>

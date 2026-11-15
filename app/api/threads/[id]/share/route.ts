@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, permissionDenied } from "@/lib/auth";
 import { activeShare, createShare, revokeShares } from "@/lib/share/service";
 
 export const runtime = "nodejs";
@@ -22,6 +22,8 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 export async function POST(_req: NextRequest, context: RouteContext) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+  const denied = permissionDenied(user, "share");
+  if (denied) return denied;
   const { id } = await context.params;
   if (!idOk(id)) return NextResponse.json({ error: "Hilo no válido" }, { status: 400 });
   const share = await createShare(user.id, id);

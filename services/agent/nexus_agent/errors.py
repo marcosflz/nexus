@@ -42,10 +42,10 @@ def describe_model_error(error: Exception | None) -> str | None:
     if isinstance(error, LlmBillingModeError):
         return (
             "Claude Code está configurado de forma que facturaría por API: quita las variables "
-            "ANTHROPIC_* del sidecar y usa CLAUDE_CODE_OAUTH_TOKEN."
+            "ANTHROPIC_* del sidecar."
         )
     if isinstance(error, LlmAuthError):
-        return "El proveedor rechazó la credencial: revisa la clave (o el token de Claude Code)."
+        return "El proveedor rechazó la credencial: revisa la clave o vuelve a vincular tu cuenta de Anthropic."
     if isinstance(error, LlmQuotaError):
         return "Se agotó la cuota o el límite de uso del proveedor. Prueba más tarde."
     if isinstance(error, LlmRateLimitError):
