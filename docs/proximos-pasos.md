@@ -1,5 +1,13 @@
 # Próximos pasos (retomar aquí)
 
+> **Actualización (noviembre 2026):** Hermes se retiró. Todos los turnos los ejecuta el sidecar nas-adk, y
+> la app es una imagen de Node sin el CLI. Todo lo que en este documento habla de Hermes (perfiles, sesiones,
+> `HERMES_BIN`, imagen pesada) es histórico.
+>
+> **Actualización (iteraciones 4–8):** agentes, Intelligent UI interactiva, autonomía y compartir ya están hechos;
+> ver `docs/decisiones-mvp.md` §9 y el README. Este documento conserva el backlog original del MVP; lo que sigue
+> abierto está en la sección «Pendiente tras las iteraciones 4–8» al final.
+
 Estado al pausar: **2026-10-04**. El stack se construyó y arrancó con `docker compose`
 y se hizo un smoke test completo por API. Este documento resume qué funciona, qué
 encontramos y el backlog priorizado para retomar.
@@ -20,7 +28,7 @@ Comando usado: `docker compose up -d --build` con la app en `http://localhost:30
 | `POST /api/uploads` con `.txt` | Texto extraído correctamente |
 | SearXNG `format=json` | Resultados reales vía JSON API |
 | `POST /api/chat` con key falsa | SSE con `event: session` (sesión de Hermes creada) y `event: error` `HTTP 401: User not found.` |
-| Perfil Hermes por usuario | `profiles/plexo-<hash>/SOUL.md` + `workspaces/plexo-<hash>/` creados en el volumen |
+| Perfil Hermes por usuario | `profiles/nexus-<hash>/SOUL.md` + `workspaces/nexus-<hash>/` (antes `plexo-<hash>`) creados en el volumen |
 
 La cadena completa BFF → spawn CLI → JSONL → SSE → UI queda validada; solo falta
 probar con una API key real para ver búsquedas y citas de extremo a extremo.
@@ -87,6 +95,9 @@ El volumen `plexo_hermes-data` contiene los perfiles y workspaces de Hermes.
 
 ### P0 — correcciones pequeñas
 
+> Hechos en la iteración 3: 1 (sesión de Hermes al vuelo) y 2 (`no_credential` → Ajustes). El 3 (cancelación)
+> tiene ya `POST /api/runs/:id/cancel`, pero un turno cancelado todavía no guarda el parcial.
+
 1. **Persistir `hermesSessionId` al vuelo**: en `app/api/chat/route.ts`, en el caso
    `event.kind === "session"`, actualizar `threads.hermesSessionId` inmediatamente
    (hoy se pierde si el turno aborta/falla y el siguiente turno arranca sin contexto).
@@ -117,8 +128,7 @@ El volumen `plexo_hermes-data` contiene los perfiles y workspaces de Hermes.
     `api_key` por instancia y callbacks): elimina el arranque en frío por turno y
     permite streaming por eventos internos. Alternativa intermedia: mantener el CLI
     pero precalentar perfiles.
-11. **SSE resumible**: persistir deltas o adoptar streams resumibles
-    (`assistant-stream/resumable`) para recargas a mitad de respuesta.
+11. ~~**SSE resumible**~~ Hecho: `GET /api/runs/:id/events?after=<seq>` (ver `docs/decisiones-mvp.md` §8).
 12. **Imagen más ligera**: hoy hereda Hermes completo (Chromium, Python, etc.). Opción:
     separar `web` (node slim) + `agent` (imagen Hermes) con un protocolo interno
     (HTTP/Unix socket) en vez de co-locar el CLI.
@@ -133,3 +143,20 @@ El volumen `plexo_hermes-data` contiene los perfiles y workspaces de Hermes.
 - Investigación de features de Perplexity y del stack: [`perplexity-funcionalidades.md`](perplexity-funcionalidades.md),
   [`stack-tecnico.md`](stack-tecnico.md).
 - Quickstart y estructura: [`../README.md`](../README.md).
+
+## Pendiente tras las iteraciones 4–8
+
+1. **Probar el navegador del agente con la imagen real** de Playwright MCP (la especificación del contenedor está
+   validada contra Docker, pero no se ha ejecutado un navegador) y añadir una **vista en vivo** (noVNC / screencast)
+   para «tomar el control» de verdad.
+2. **Filtrado de salida a nivel de red** para la red `nexus-sandbox` (hoy depende de reglas `DOCKER-USER` del host).
+3. **Búsqueda semántica** del conocimiento: imagen `pgvector/pgvector`, columna `embedding` y ranking híbrido (RRF)
+   con la búsqueda de texto completo actual.
+4. **Model Council** (N modelos en paralelo + sintetizador) y **ramas de conversación** (`messages.parent_id`).
+5. **Varias instancias**: sustituir el bus en proceso por `LISTEN/NOTIFY`.
+6. **Deltas de argumentos de herramientas** en nas-adk (hoy una herramienta aparece completa, no a medida que se
+   escribe), y emitir el razonamiento del modelo como parte.
+7. Probar los **conectores MCP** contra servidores reales (hoy solo con *mocks* en nas-adk) y añadir OAuth.
+8. Guardar el **parcial al cancelar** un turno.
+
+9. **Tarjetas generativas en `/s/<slug>`**: la vista pública solo muestra texto y fuentes (a propósito, para no exponer argumentos de herramientas). Renderizar solo el programa OpenUI ya validado, y ocultar los formularios interactivos.

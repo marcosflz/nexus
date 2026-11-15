@@ -1,12 +1,18 @@
 /*
  * Capas: OpenUI se coloca por encima del reset de Tailwind y por debajo de
- * nuestros componentes y utilidades, para que el tema de Plexo mande.
+ * nuestros componentes y utilidades, para que el tema de Nexus mande.
  */
 @layer theme, base, openui, components, utilities;
 
 @import "tailwindcss";
 @import "@openuidev/react-ui/layered/styles/index.css";
 @import "./tokens.css";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+/*
+ ---break---
+ */
+@custom-variant dark (&:is(.dark *));
 
 html,
 body {
@@ -16,97 +22,185 @@ body {
 body {
   background: var(--bg);
   color: var(--fg);
+  /* La página no rebota entera ni resalta en gris al tocar; cada panel hace su propio scroll. */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
 }
 
-/* Prosa del asistente */
+/* iOS amplía la página al enfocar un campo con letra menor de 16px. */
+@media (hover: none) and (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* Prosa del asistente: serif de lectura, 17px e interlineado amplio (como Perplexity) */
 .aui-md {
-  line-height: 1.65;
-  font-size: 0.95rem;
+  font-family: var(--font-serif-answer), ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  line-height: 1.7;
+  font-size: 1.0625rem;
+  color: var(--fg);
+  min-width: 0;
+  overflow-wrap: break-word;
 }
-
-.aui-md > * + * {
-  margin-top: 0.75rem;
-}
-
-.aui-md h1,
-.aui-md h2,
-.aui-md h3 {
-  font-weight: 600;
-  margin-top: 1.25rem;
-}
-
-.aui-md h1 {
-  font-size: 1.35rem;
-}
-
-.aui-md h2 {
-  font-size: 1.15rem;
-}
-
-.aui-md h3 {
-  font-size: 1rem;
-}
-
-.aui-md a {
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.aui-md ul {
-  list-style: disc;
-  padding-left: 1.25rem;
-}
-
-.aui-md ol {
-  list-style: decimal;
-  padding-left: 1.25rem;
-}
-
+.aui-md > * + * { margin-top: 0.9rem; }
+.aui-md h1, .aui-md h2, .aui-md h3 { font-weight: 600; margin-top: 1.6rem; letter-spacing: -0.005em; line-height: 1.35; }
+.aui-md h1 { font-size: 1.45rem; }
+.aui-md h2 { font-size: 1.25rem; }
+.aui-md h3 { font-size: 1.1rem; }
+.aui-md > :first-child { margin-top: 0; }
+.aui-md strong { font-weight: 600; }
+.aui-md a { color: var(--brand); text-decoration: none; }
+.aui-md a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.aui-md ul { list-style: disc; padding-left: 1.4rem; }
+.aui-md ol { list-style: decimal; padding-left: 1.4rem; }
+.aui-md li + li { margin-top: 0.35rem; }
+.aui-md li::marker { color: var(--muted-fg); }
 .aui-md code {
-  background: color-mix(in oklab, var(--fg) 8%, transparent);
-  padding: 0.1rem 0.3rem;
-  border-radius: 0.25rem;
+  font-family: var(--font-mono);
+  background: var(--surface-2);
+  padding: 0.12rem 0.35rem;
+  border-radius: 0.375rem;
   font-size: 0.85em;
 }
-
 .aui-md pre {
-  background: var(--surface-2);
+  background: var(--surface);
   border: 1px solid var(--border);
-  padding: 0.75rem;
-  border-radius: var(--radius-sm);
+  padding: 0.9rem 1rem;
+  border-radius: 0.75rem;
+  overflow-x: auto;
+}
+.aui-md pre code { background: transparent; padding: 0; }
+.aui-md blockquote { border-left: 2px solid var(--brand); padding-left: 0.9rem; color: var(--fg-soft); }
+.aui-md table { border-collapse: collapse; width: 100%; font-size: 0.925rem; font-family: var(--font-sans); }
+.aui-md th { font-weight: 500; color: var(--muted-fg); }
+@media (max-width: 640px) {
+  /* Las tablas anchas se desplazan dentro de sí mismas en vez de ensanchar la página. */
+  .aui-md table { display: block; overflow-x: auto; }
+}
+.aui-md th, .aui-md td { border-bottom: 1px solid var(--border); padding: 0.55rem 0.6rem; text-align: left; }
+
+/* Superficies de la UI generativa dentro del hilo */
+.nexus-openui {
+  margin-top: 0.75rem;
+  max-width: 100%;
   overflow-x: auto;
 }
 
-.aui-md pre code {
-  background: transparent;
-  padding: 0;
-}
-
-.aui-md blockquote {
-  border-left: 3px solid var(--border-strong);
-  padding-left: 0.75rem;
-  color: var(--muted-fg);
-}
-
-.aui-md table {
-  border-collapse: collapse;
-  width: 100%;
-}
-
-.aui-md th,
-.aui-md td {
-  border: 1px solid var(--border);
-  padding: 0.35rem 0.5rem;
-  text-align: left;
-}
-
-/* Superficies de la UI generativa dentro del hilo */
-.plexo-openui {
-  margin-top: 0.75rem;
-}
-
-.plexo-openui pre,
-.plexo-openui code {
+.nexus-openui pre,
+.nexus-openui code {
   font-family: var(--font-mono, ui-monospace, monospace);
+}
+/*
+ ---break---
+ */
+@theme inline {
+  --font-sans:
+    var(--font-geist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+/*
+ ---break---
+ */
+/*
+ * Puente entre las dos paletas: shadcn/prompt-kit usan --background, --primary…
+ * y Nexus define su identidad en tokens.css (--bg, --brand…). Aquí las
+ * variables de shadcn se *derivan* de los tokens de Nexus, de modo que hay una
+ * sola paleta y el cambio claro/oscuro funciona igual para todo. No se
+ * redefinen --border, --ring ni --chart-N: ya existen en tokens.css.
+ */
+:root,
+.dark {
+  --background: var(--bg);
+  --foreground: var(--fg);
+  --card: var(--surface);
+  --card-foreground: var(--fg);
+  --popover: var(--surface);
+  --popover-foreground: var(--fg);
+  --primary: var(--solid);
+  --primary-foreground: var(--solid-fg);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--fg);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--muted-fg);
+  --accent: var(--surface-2);
+  --accent-foreground: var(--fg);
+  --destructive: var(--danger);
+  --input: var(--border-strong);
+  --sidebar: var(--sidebar-bg);
+  --sidebar-foreground: var(--fg);
+  --sidebar-primary: var(--solid);
+  --sidebar-primary-foreground: var(--solid-fg);
+  --sidebar-accent: var(--surface-2);
+  --sidebar-accent-foreground: var(--fg);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* Toque moderno: scrollbars finas, selección con el acento y la animación de TextShimmer. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+::selection {
+  background: color-mix(in oklab, var(--brand) 28%, transparent);
+}
+@keyframes shimmer {
+  from { background-position: 100% center; }
+  to { background-position: -100% center; }
 }

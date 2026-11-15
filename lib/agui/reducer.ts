@@ -1,13 +1,17 @@
 import {
   EventType,
-  PLEXO_SOURCES,
+  LEGACY_SOURCES,
+  NEXUS_FOLLOWUPS,
+  NEXUS_REASONING,
+  NEXUS_SOURCES,
   type AgUiEvent,
-  type PlexoSourcesPayload,
+  type NexusFollowupsPayload,
+  type NexusSourcesPayload,
 } from "./events";
-import { OPENUI_TOOL_NAME, splitOpenUiBlocks } from "@/lib/openui/blocks";
 import type {
   UiInterrupt,
   UiMessage,
+  UiPart,
   UiSubagent,
   UiToolCall,
   UiUsage,
@@ -24,13 +28,17 @@ export interface AgUiState {
   message: UiMessage;
   runId: string | null;
   threadId: string | null;
-  agentSessionId: string | null;
   interrupts: UiInterrupt[];
-  /** Texto crudo del asistente, con los bloques de UI dentro. */
+  /** Texto crudo del asistente tal y como llega en streaming. */
   rawText: string;
-  /** Llamadas a herramientas emitidas por AG-UI (Hermes). */
+  /** Llamadas a herramientas emitidas por AG-UI. */
   toolCalls: UiToolCall[];
+  /** Posición de `rawText` en la que arrancó cada herramienta (para ordenar `parts`). */
+  toolOffsets: Record<string, number>;
 }
+
+/** Tope de lo que se guarda y se muestra del razonamiento de un turno. */
+export const MAX_REASONING_CHARS = 24_000;
 
 export function initialAgUiState(
   messageId: string,
@@ -49,10 +57,10 @@ export function initialAgUiState(
     },
     runId: null,
     threadId: null,
-    agentSessionId: null,
     interrupts: [],
     rawText: "",
     toolCalls: [],
+    toolOffsets: {},
   };
 }
 
@@ -92,41 +100,43 @@ function parseArgsBestEffort(argsText: string): unknown {
 }
 
 /**
- * Recalcula `content` y `tools` a partir del texto crudo y de las herramientas.
- *
- * Los bloques OpenUI se derivan del texto, así que su estado es siempre
- * coherente con lo que se ha recibido: no hay una segunda fuente de verdad que
- * pueda desincronizarse.
+ * Recalcula `content`, `tools` y `parts` a partir del texto crudo y de las
+ * herramientas. El texto se parte en cada herramienta (según el punto del texto
+ * en que arrancó) para conservar el orden real texto → pasos → texto. La UI
+ * generativa llega como llamadas a herramienta (`present_openui`), no en el texto.
  */
 function rebuild(state: AgUiState, patch: Partial<UiMessage> = {}): AgUiState {
-  const segments = splitOpenUiBlocks(state.rawText);
-  const textParts: string[] = [];
-  const openui: UiToolCall[] = [];
+  const parts: UiPart[] = [];
 
-  for (const segment of segments) {
-    if (segment.type === "text") {
-      textParts.push(segment.text);
-      continue;
-    }
-    const program = segment.program;
-    openui.push({
-      id: `openui-${segment.index}`,
-      name: OPENUI_TOOL_NAME,
-      kind: "openui",
-      input: { ui: program },
-      argsText: JSON.stringify({ ui: program }),
-      status: segment.closed ? "complete" : "running",
-    });
+  const pushChunk = (chunk: string) => {
+    const text = chunk.replace(/\n{3,}/g, "\n\n");
+    if (text) parts.push({ type: "text", text });
+  };
+
+  let cursor = 0;
+  for (const tool of state.toolCalls) {
+    const offset = Math.min(
+      Math.max(state.toolOffsets[tool.id] ?? state.rawText.length, cursor),
+      state.rawText.length,
+    );
+    pushChunk(state.rawText.slice(cursor, offset));
+    parts.push({ type: "tool", toolId: tool.id });
+    cursor = offset;
   }
+  pushChunk(state.rawText.slice(cursor));
 
-  const content = textParts.join("").replace(/\n{3,}/g, "\n\n");
+  const content = parts
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .join("")
+    .replace(/\n{3,}/g, "\n\n");
 
   return {
     ...state,
     message: {
       ...state.message,
       content,
-      tools: [...state.toolCalls, ...openui],
+      tools: state.toolCalls,
+      parts,
       ...patch,
     },
   };
@@ -136,6 +146,9 @@ function withTool(state: AgUiState, tool: UiToolCall): AgUiState {
   const exists = state.toolCalls.some((item) => item.id === tool.id);
   return {
     ...state,
+    toolOffsets: exists
+      ? state.toolOffsets
+      : { ...state.toolOffsets, [tool.id]: state.rawText.length },
     toolCalls: exists
       ? state.toolCalls.map((item) => (item.id === tool.id ? { ...item, ...tool } : item))
       : [...state.toolCalls, tool],
@@ -153,9 +166,10 @@ function patchTool(
 export function reduceAgUi(state: AgUiState, event: AgUiEvent): AgUiState {
   switch (event.type) {
     case EventType.RUN_STARTED:
+      // También se emite al reanudar un run en pausa: la pausa ya no está vigente.
       return rebuild(
-        { ...state, runId: event.runId, threadId: event.threadId },
-        { runId: event.runId, status: "running" },
+        { ...state, runId: event.runId, threadId: event.threadId, interrupts: [] },
+        { runId: event.runId, status: "running", interrupts: [] },
       );
 
     case EventType.TEXT_MESSAGE_CONTENT:
@@ -201,13 +215,30 @@ export function reduceAgUi(state: AgUiState, event: AgUiEvent): AgUiState {
           ...tool,
           status: isError ? "error" : "complete",
           durationMs,
+          ...(typeof event.content === "string" && event.content ? { result: event.content } : {}),
         })),
       );
     }
 
     case EventType.CUSTOM: {
-      if (event.name !== PLEXO_SOURCES) return state;
-      const payload = event.value as PlexoSourcesPayload | undefined;
+      if (event.name === "nexus.skill") {
+        const value = event.value as { id: string; name?: string };
+        const name = value.name ?? value.id;
+        if (state.toolCalls.some((tool) => tool.name === "activate_skill" && [value.id, name].includes((tool.input as { skill?: string } | undefined)?.skill ?? ""))) return state;
+        return rebuild(withTool(state, { id: `skill-${value.id}`, name: "activate_skill", input: { skill: name }, status: "complete", result: `Skill activada: ${name}` }));
+      }
+      if (event.name === NEXUS_REASONING) {
+        const delta = (event.value as { delta?: unknown } | undefined)?.delta;
+        if (typeof delta !== "string" || !delta) return state;
+        return rebuild(state, { reasoning: ((state.message.reasoning ?? "") + delta).slice(0, MAX_REASONING_CHARS) });
+      }
+      if (event.name === NEXUS_FOLLOWUPS) {
+        const payload = event.value as NexusFollowupsPayload | undefined;
+        const questions = (payload?.questions ?? []).filter((q) => typeof q === "string" && q.trim());
+        return rebuild(state, { followups: questions });
+      }
+      if (event.name !== NEXUS_SOURCES && event.name !== LEGACY_SOURCES) return state;
+      const payload = event.value as NexusSourcesPayload | undefined;
       return rebuild(state, { sources: payload?.sources ?? [] });
     }
 
@@ -241,16 +272,21 @@ export function reduceAgUi(state: AgUiState, event: AgUiEvent): AgUiState {
         ? (outcome as { interrupts?: UiInterrupt[] }).interrupts ?? []
         : [];
       const usage = uiUsageFromTokenUsage(event.usage);
+      // Una llamada que espera a la persona (formulario, aprobación) sigue pendiente.
+      const waiting = new Set(interrupts.map((item) => item.toolCallId).filter(Boolean));
       return rebuild(
         {
           ...state,
           interrupts,
           toolCalls: state.toolCalls.map((tool) =>
-            tool.status === "running" ? { ...tool, status: "complete" as const } : tool,
+            tool.status === "running" && !waiting.has(tool.id)
+              ? { ...tool, status: "complete" as const }
+              : tool,
           ),
         },
         {
-          status: "complete",
+          // En pausa el mensaje no está terminado: la UI debe seguir mostrándolo vivo.
+          status: interrupted ? "running" : "complete",
           interrupts,
           ...(usage ? { usage } : {}),
         },

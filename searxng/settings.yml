@@ -10,3 +10,15 @@ search:
   formats:
     - html
     - json
+
+# Google, DuckDuckGo, Brave y Startpage bloquean con frecuencia las IP de servidor
+# (CAPTCHA, 403). Bing viene desactivado por defecto y suele seguir respondiendo:
+# con él activo, la búsqueda no se queda a cero cuando los demás fallan.
+engines:
+  - name: bing
+    disabled: false
+  - name: bing news
+    disabled: false
+  # Devuelve artículos de hace años a cualquier consulta de actualidad.
+  - name: wikinews
+    disabled: true

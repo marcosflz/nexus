@@ -1,4 +1,4 @@
-import type { HermesTokens } from "@/lib/hermes/events";
+import type { TokenUsage } from "@/lib/agents/usage";
 
 /**
  * Ciclo de vida de un turno.
@@ -7,19 +7,43 @@ import type { HermesTokens } from "@/lib/hermes/events";
  * haber producido efectos (ficheros, navegación, correos) antes de cortarse, y
  * la UI debe pedir revisión en vez de ofrecer un reintento ciego.
  */
-export type RunStatus = "running" | "completed" | "interrupted" | "error" | "cancelled";
+export type RunStatus =
+  | "running"
+  | "awaiting_input"
+  | "completed"
+  | "interrupted"
+  | "error"
+  | "cancelled";
+
+/**
+ * `awaiting_input` es un run en pausa a propósito (aprobación o formulario del
+ * usuario) y se reanuda con `resume`. No es lo mismo que `interrupted`, que
+ * significa que el proceso murió a mitad del turno.
+ */
+
+/** `room`: turno de un NexBot en una sala; lo provoca una persona o la mención de otro bot. */
+export type RunInitiator = "user" | "routine" | "trigger" | "room";
 
 export interface Run {
+  runtimeSnapshot?: import("@/lib/db/schema").RuntimeSnapshot | null;
   id: string;
   threadId: string;
   userId: string;
   status: RunStatus;
+  initiator: RunInitiator;
+  backend: string | null;
+  agentId: string | null;
+  agentVersionId: string | null;
+  botId: string | null;
+  computer: boolean;
+  groupId: string | null;
+  parentRunId: string | null;
   agentSessionId: string | null;
   leaseUntil: Date | null;
   heartbeatAt: Date | null;
   lastSeq: number;
   error: string | null;
-  usage: HermesTokens | null;
+  usage: TokenUsage | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -35,6 +59,7 @@ export interface RunEventRecord {
 export type RunTransition =
   | { kind: "started"; at: Date }
   | { kind: "finished"; at: Date; interrupted: boolean }
+  | { kind: "awaiting-input"; at: Date }
   | { kind: "error"; at: Date }
   | { kind: "cancelled"; at: Date }
   | { kind: "lease-expired"; at: Date };
@@ -56,6 +81,8 @@ export function nextRunState(status: RunStatus, transition: RunTransition): RunS
       return status === "running" ? "running" : status;
     case "finished":
       return transition.interrupted ? "interrupted" : "completed";
+    case "awaiting-input":
+      return status === "running" ? "awaiting_input" : status;
     case "error":
       return "error";
     case "cancelled":
@@ -63,6 +90,16 @@ export function nextRunState(status: RunStatus, transition: RunTransition): RunS
     case "lease-expired":
       return status === "running" ? "interrupted" : status;
   }
+}
+
+/** Estados terminales: el run ya no va a producir más eventos. */
+export function isTerminalStatus(status: RunStatus): boolean {
+  return (
+    status === "completed" ||
+    status === "interrupted" ||
+    status === "error" ||
+    status === "cancelled"
+  );
 }
 
 export function isLeaseExpired(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openuiInstructions, openuiToolsEnabled } from "./prompt";
+import { openuiToolsEnabled } from "./prompt";
 import { validateOpenUiProgram } from "./validate";
 
 /**
@@ -8,19 +8,6 @@ import { validateOpenUiProgram } from "./validate";
  * falle de forma evidente.
  */
 describe("integración OpenUI", () => {
-  it("genera un prompt con la especificación y la convención de entrega", () => {
-    const instructions = openuiInstructions();
-
-    expect(instructions).toContain("```openui");
-    expect(instructions).toContain("root =");
-    // Componentes que la librería ofrece y el prompt debe anunciar.
-    for (const component of ["Card", "TextContent", "Table", "BarChart"]) {
-      expect(instructions).toContain(component);
-    }
-    // Se cachea: no se regenera en cada petición.
-    expect(openuiInstructions()).toBe(instructions);
-  });
-
   it("acepta un programa válido", () => {
     const result = validateOpenUiProgram('root = Card([t])\nt = TextContent("Hola")');
     expect(result.ok).toBe(true);

@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { credentials } from "@/lib/db/schema";
+import { mayUseClaudeCode, modelAllowed, providerAllowed } from "@/lib/access";
 import { getCurrentUser } from "@/lib/auth";
+import { getCredentialRow, type ModelEntry } from "@/lib/credentials";
 import { decryptSecret } from "@/lib/crypto";
+import { listChatGptModels } from "@/lib/instance/chatgpt";
+import { listClaudeCodeModels } from "@/lib/instance/claude-code";
+import { extractModelEntries } from "@/lib/models/catalog";
 import { getProvider } from "@/lib/providers";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 80;
 
 const bodySchema = z.object({
   provider: z.string().min(1),
@@ -16,47 +18,20 @@ const bodySchema = z.object({
   apiKey: z.string().max(500).optional(),
 });
 
-/** Los proveedores devuelven `{data:[{id}]}`, `{models:[…]}` o una lista pelada. */
-function extractModelIds(payload: unknown): string[] {
-  const ids = new Set<string>();
-
-  const push = (item: unknown) => {
-    if (typeof item === "string") {
-      if (item.trim()) ids.add(item.trim());
-      return;
-    }
-    if (!item || typeof item !== "object") return;
-    const record = item as Record<string, unknown>;
-    const id =
-      typeof record.id === "string" && record.id
-        ? record.id
-        : typeof record.name === "string" && record.name
-          ? record.name
-          : null;
-    if (id) ids.add(id);
-  };
-
-  if (Array.isArray(payload)) {
-    payload.forEach(push);
-  } else if (payload && typeof payload === "object") {
-    const record = payload as Record<string, unknown>;
-    const list = Array.isArray(record.data)
-      ? record.data
-      : Array.isArray(record.models)
-        ? record.models
-        : null;
-    if (list) list.forEach(push);
+function reply(user: Parameters<typeof modelAllowed>[0], providerId: string, all: ModelEntry[]) {
+  const catalog = all.filter((model) => modelAllowed(user, providerId, model.id));
+  if (catalog.length === 0) {
+    return NextResponse.json({ error: "El proveedor no devolvió ningún modelo" }, { status: 400 });
   }
-
-  return [...ids].sort((a, b) => a.localeCompare(b));
+  return NextResponse.json({ catalog, models: catalog.map((model) => model.id) });
 }
 
 /**
- * Lista los modelos de un proveedor para no tener que escribirlos a mano.
+ * Catálogo de modelos de un proveedor para elegir cuáles mostrar.
  *
- * La URL sale siempre de `ProviderInfo.modelsUrl`, nunca de la petición: así
- * esta ruta no puede convertirse en un SSRF que apunte a un host arbitrario con
- * la clave del usuario.
+ * - Suscripciones vinculadas (Claude, ChatGPT): los modelos de la cuenta del usuario.
+ * - Servicios con clave: la URL sale siempre de `ProviderInfo.modelsUrl`, nunca de la
+ *   petición, para que esta ruta no sea un SSRF con la clave del usuario.
  */
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
@@ -67,51 +42,47 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Petición no válida" }, { status: 400 });
   }
   const { provider: providerId } = parsed.data;
-
   const provider = getProvider(providerId);
-  if (!provider?.modelsUrl) {
-    return NextResponse.json(
-      { error: "Este proveedor no permite listar modelos" },
-      { status: 400 },
-    );
+  if (!provider || !providerAllowed(user, providerId) || (provider.requires && !mayUseClaudeCode(user))) {
+    return NextResponse.json({ error: "Proveedor no disponible" }, { status: 403 });
+  }
+
+  if (provider.linkFlow === "claude" || provider.linkFlow === "chatgpt") {
+    const result = provider.linkFlow === "claude" ? await listClaudeCodeModels(user.id) : await listChatGptModels(user.id);
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+    return reply(user, providerId, result.models);
+  }
+
+  if (!provider.modelsUrl) {
+    return NextResponse.json({ error: "Este proveedor no permite listar modelos: escribe su nombre" }, { status: 400 });
   }
 
   let apiKey = parsed.data.apiKey?.trim() || null;
   if (!apiKey) {
-    const [row] = await db
-      .select()
-      .from(credentials)
-      .where(eq(credentials.userId, user.id))
-      .limit(1);
-    // Solo vale la clave guardada si es del mismo proveedor: si el usuario
-    // acaba de cambiar en el formulario, esa clave es de otro.
-    if (row && row.provider === providerId && row.apiKeyEnc) {
+    const row = await getCredentialRow(user.id, providerId);
+    if (row?.apiKeyEnc) {
       try {
         apiKey = decryptSecret(row.apiKeyEnc);
       } catch {
-        return NextResponse.json(
-          { error: "No se pudo descifrar la API key guardada" },
-          { status: 500 },
-        );
+        return NextResponse.json({ error: "No se pudo descifrar la API key guardada" }, { status: 500 });
       }
     }
   }
-
   if (!apiKey) {
-    return NextResponse.json(
-      { error: "Introduce tu API key para listar los modelos" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Introduce tu API key para listar los modelos" }, { status: 400 });
   }
 
   try {
+    const auth: Record<string, string> =
+      provider.modelsAuth === "anthropic"
+        ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+        : { Authorization: `Bearer ${apiKey}` };
     const response = await fetch(provider.modelsUrl, {
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      headers: { ...auth, Accept: "application/json" },
       signal: AbortSignal.timeout(12_000),
       redirect: "error",
       cache: "no-store",
     });
-
     if (!response.ok) {
       return NextResponse.json(
         {
@@ -123,16 +94,7 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-
-    const models = extractModelIds(await response.json());
-    if (models.length === 0) {
-      return NextResponse.json(
-        { error: "El proveedor no devolvió ningún modelo" },
-        { status: 400 },
-      );
-    }
-
-    return NextResponse.json({ models });
+    return reply(user, providerId, extractModelEntries(await response.json()));
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "TimeoutError";
     return NextResponse.json(

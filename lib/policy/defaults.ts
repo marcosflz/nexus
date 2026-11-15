@@ -92,9 +92,25 @@ const AGENT_TOOLS = new Set([
   "cronjob",
   "skill",
   "skills_list",
+  "activate_skill", "read_skill_file", "read_draft", "read_draft_file", "write_draft_file", "delete_draft_file", "validate_draft",
 ]);
 
+/** Herramientas propias de Nexus que solo leen o escriben datos del propio usuario. */
+const NEXUS_APP_TOOLS = new Set(["knowledge_search", "remember", "recall", "forget"]);
+
+/** Una herramienta de un conector MCP se expone como `<conector>__<herramienta>`. */
+export function isConnectorTool(tool: string): boolean {
+  return tool.includes("__");
+}
+
 const VAULT_TOOLS = /^browser_vault/;
+
+/** Lo que un NexBot hace sin efectos fuera de su propio contenedor. */
+const BOT_INTERNAL_TOOLS = /^nexbot__(browser_snapshot|browser_screenshot|browser_scroll|desktop_screenshot|workspace_(list|read|write))$/;
+
+/** Lo único que puede usar un bot en un turno de sala: su escritorio, su workspace y el tablero. */
+export const ROOM_TOOLS =
+  /^(nexbot__(desktop_(screenshot|open_url|click|type|key|scroll|wait)|workspace_(list|read|write))|board_(list|create_subtask|set_status|assign|add_blocker))$/;
 
 /**
  * Reglas por defecto. El orden no decide: el motor aplica
@@ -130,7 +146,15 @@ export const DEFAULT_RULES: PolicyRule[] = [
     when: (req) => TERMINAL_TOOLS.has(req.tool),
   },
 
+  {
+    id: "deny-room-outside",
+    effect: "deny",
+    reason: "En una sala, un bot solo puede usar su propio entorno y el tablero.",
+    when: (req) => req.initiator === "room" && !ROOM_TOOLS.test(req.tool) && !["activate_skill", "read_skill_file"].includes(req.tool),
+  },
+
   // --- Escrituras: siempre piden aprobación ---
+  { id: "ask-skill-script", effect: "ask", reason: "La skill quiere ejecutar código en el entorno del Nexbot.", when: (req) => req.tool === "run_skill_script" },
   {
     id: "ask-browser-write",
     effect: "ask",
@@ -141,7 +165,7 @@ export const DEFAULT_RULES: PolicyRule[] = [
     id: "ask-scheduled-write",
     effect: "ask",
     reason: "Una rutina programada quiere ejecutar una acción con efectos.",
-    when: (req) => req.initiator === "routine" && !READ_ONLY_WEB.has(req.tool),
+    when: (req) => req.initiator === "routine" && !READ_ONLY_WEB.has(req.tool) && !BOT_INTERNAL_TOOLS.test(req.tool) && !["activate_skill", "read_skill_file"].includes(req.tool),
   },
 
   // --- Lecturas permitidas ---
@@ -159,6 +183,24 @@ export const DEFAULT_RULES: PolicyRule[] = [
     id: "allow-agent",
     effect: "allow",
     when: (req) => AGENT_TOOLS.has(req.tool),
+  },
+  {
+    id: "allow-nexus-app",
+    effect: "allow",
+    when: (req) => NEXUS_APP_TOOLS.has(req.tool),
+  },
+  // Las escrituras del tablero las valida además el BFF (sala, permisos y tope por turno).
+  {
+    id: "allow-room",
+    effect: "allow",
+    when: (req) => req.initiator === "room" && ROOM_TOOLS.test(req.tool),
+  },
+  // Un conector lo habilitó la propia persona y limita sus herramientas (`allowTools`);
+  // una rutina que lo use sigue pidiendo aprobación por `ask-scheduled-write`.
+  {
+    id: "allow-connector-user",
+    effect: "allow",
+    when: (req) => req.kind === "connector" && req.initiator === "user",
   },
   // Sin coincidencia -> el motor deniega.
 ];

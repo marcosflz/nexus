@@ -1,0 +1,115 @@
+# Entorno desechable del e2e de NexBots. No toca el stack `nexus`:
+#   docker compose -p nexbots-e2e -f services/nexbot/e2e/compose.yml up -d --build
+name: nexbots-e2e
+
+services:
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: nexbots-e2e-docker-proxy
+    environment:
+      CONTAINERS: 1
+      VOLUMES: 1
+      NETWORKS: 1
+      POST: 1
+      DELETE: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [control]
+
+  sandboxd:
+    build:
+      context: ../../sandboxd
+      dockerfile: ../../docker/sandboxd.Dockerfile
+    container_name: nexbots-e2e-sandboxd
+    environment:
+      NEXUS_AGENT_SECRET: ${NEXUS_AGENT_SECRET:-e2e-secret-no-es-real}
+      DOCKER_HOST: http://docker-proxy:2375
+      SANDBOX_NETWORK: nexbots-e2e-unused
+      BOT_IMAGE: nexus-nexbot:e2e
+      BOT_EGRESS_CONTAINER: nexbots-e2e-egress
+      BOT_CONTROL_CONTAINERS: nexbots-e2e-sandboxd,nexbots-e2e-agent
+      BOT_SUBNET_BASE: 10.238.0.0/16
+      # Etiqueta propia: el sandboxd de una instalación real en este host no debe ver estos bots.
+      BOT_LABEL: nexus.e2e.bot
+    depends_on: [docker-proxy, egress]
+    networks: [default, control]
+    ports:
+      - "127.0.0.1:18095:8095"
+
+  egress:
+    build:
+      context: ../../sandboxd
+      dockerfile: ../../docker/sandboxd.Dockerfile
+    container_name: nexbots-e2e-egress
+    command: ["python", "-m", "sandboxd.egress"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      # Solo aquí se permite un destino privado: la web de prueba.
+      EGRESS_ALLOW_HOSTS: nexbots-e2e-site
+    networks: [default]
+
+  # Sidecar real, con el nas-adk del repositorio hermano.
+  agent:
+    build:
+      context: ../../agent
+      dockerfile: ../../docker/agent.Dockerfile
+      additional_contexts:
+        nas-adk: ../../../../nas-adk
+    container_name: nexbots-e2e-agent
+    environment:
+      NEXUS_AGENT_SECRET: ${NEXUS_AGENT_SECRET:-e2e-secret-no-es-real}
+      SEARXNG_URL: http://127.0.0.1:9
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [default]
+    ports:
+      - "127.0.0.1:18096:8090"
+
+  # Simulador de modelo: NO es un LLM. Decide leyendo los píxeles de las capturas que recibe.
+  model:
+    image: nexus-nexbot:e2e
+    container_name: nexbots-e2e-model
+    user: "10010"
+    command: ["python", "/fake_model.py"]
+    volumes:
+      - ./fake_model.py:/fake_model.py:ro
+    networks: [default]
+    ports:
+      - "127.0.0.1:18097:8080"
+
+  site:
+    image: python:3.12-slim
+    container_name: nexbots-e2e-site
+    command: ["python", "/site.py"]
+    volumes:
+      - ./site.py:/site.py:ro
+    networks: [default]
+
+  db:
+    image: postgres:18-alpine
+    container_name: nexbots-e2e-db
+    environment:
+      POSTGRES_USER: plexo
+      POSTGRES_PASSWORD: plexo
+      POSTGRES_DB: plexo
+    tmpfs: ["/var/lib/postgresql"]
+    ports:
+      - "127.0.0.1:15433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plexo -d plexo"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Solo construye la imagen del runtime: los bots los crea sandboxd.
+  nexbot-image:
+    profiles: ["build-only"]
+    build:
+      context: ../
+      dockerfile: ../../docker/nexbot.Dockerfile
+    image: nexus-nexbot:e2e
+
+networks:
+  control:
+    internal: true

@@ -1,27 +1,25 @@
-# Imagen base oficial de Hermes (incluye el CLI `hermes`, Python y Node 26).
-# Plexo embebe el CLI: cada turno se ejecuta con el perfil del usuario y su key.
-FROM nousresearch/hermes-agent:latest
+# Imagen de la app (Next.js + BFF). El motor de agentes vive en otro contenedor
+# (sidecar nas-adk, docker/agent.Dockerfile), así que aquí solo hace falta Node.
 
-USER root
+FROM node:24-bookworm-slim AS deps
 WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+# Corepack instala la versión de pnpm fijada en package.json (packageManager).
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
+FROM deps AS build
+COPY . .
+RUN pnpm run build && pnpm prune --prod
+
+FROM node:24-bookworm-slim AS runtime
+WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
-    HERMES_HOME=/opt/data \
-    HERMES_BIN=/opt/hermes/.venv/bin/hermes
-
-COPY package.json .npmrc ./
-# --include=dev: la imagen base define NODE_ENV=production y npm omitiría
-# tailwind/typescript, necesarios para `next build`.
-# El .npmrc debe estar presente ANTES del install: fija legacy-peer-deps, sin lo
-# cual npm aborta por el conflicto zustand 4 (OpenUI) / zustand 5 (assistant-ui).
-RUN npm install --include=dev --no-audit --no-fund
-
-COPY . .
-RUN npm run build && npm prune --omit=dev && chown -R 10000:10000 /app
-
+    PORT=3000
+COPY --from=build --chown=node:node /app ./
+USER node
 EXPOSE 3000
-
-# Se conserva el ENTRYPOINT de la imagen (dispatcher/s6): inicializa /opt/data,
-# arregla permisos del volumen y luego ejecuta este CMD como el usuario hermes.
-CMD ["bash", "/app/docker/start-web.sh"]
+CMD ["sh", "/app/docker/start-web.sh"]

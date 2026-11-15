@@ -27,7 +27,7 @@ describe("reduceAgUi", () => {
       { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "mundo" },
       {
         type: EventType.CUSTOM,
-        name: "plexo.sources",
+        name: "nexus.sources",
         value: { sources: [{ id: 1, url: "https://a.test", domain: "a.test" }] },
       },
       {
@@ -54,34 +54,54 @@ describe("reduceAgUi", () => {
     expect(tool?.input).toEqual({ query: "clima madrid" });
   });
 
-  it("extrae un bloque openui del texto y lo deja fuera de la prosa", () => {
-    const intro = "Mira este resumen.\n\n";
-    const program = 'root = Card([t])\nt = TextContent("Hola")';
+  it("la UI generativa llega como herramienta y un bloque cercado en el texto es solo texto", () => {
     const events = [
-      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: intro },
-      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "```openui\n" },
-      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: `${program}\n` },
+      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "Antes.\n```openui\nroot = Card([])\n```\n" },
+      { type: EventType.TOOL_CALL_START, toolCallId: "c1", toolCallName: "present_openui" },
+      { type: EventType.TOOL_CALL_ARGS, toolCallId: "c1", delta: '{"ui":"root = Card([])"}' },
+      { type: EventType.TOOL_CALL_END, toolCallId: "c1" },
     ] as unknown as AgUiEvent[];
 
-    // A mitad del bloque: existe, pero sigue en curso. El salto de párrafo que
-    // precedía al bloque se conserva: quitarlo rompería el texto al llegar en
-    // fragmentos.
-    const partial = reduceAgUiAll(events, "m1");
-    expect(partial.message.content).toBe("Mira este resumen.\n\n");
-    const running = partial.message.tools.find((item) => item.kind === "openui");
-    expect(running?.status).toBe("running");
-    expect(running?.name).toBe("present_openui");
+    const { message } = reduceAgUiAll(events, "m1");
 
-    // Cerrado: programa completo y listo para persistir.
-    const closed = reduceAgUi(partial, {
-      type: EventType.TEXT_MESSAGE_CONTENT,
-      messageId: "m1",
-      delta: "```\n",
-    } as AgUiEvent);
+    expect(message.tools).toHaveLength(1);
+    expect(message.tools[0]).toMatchObject({ id: "c1", name: "present_openui", input: { ui: "root = Card([])" } });
+    expect(message.content).toContain("```openui");
+    expect(message.parts?.map((part) => part.type)).toEqual(["text", "tool"]);
+  });
 
-    const done = closed.message.tools.find((item) => item.kind === "openui");
-    expect(done?.status).toBe("complete");
-    expect(done?.input).toEqual({ ui: program });
+  it("conserva el orden real de texto y herramientas en parts", () => {
+    const events = [
+      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "Busco. " },
+      { type: EventType.TOOL_CALL_START, toolCallId: "c1", toolCallName: "web_search" },
+      { type: EventType.TOOL_CALL_END, toolCallId: "c1" },
+      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "Leo. " },
+      { type: EventType.TOOL_CALL_START, toolCallId: "c2", toolCallName: "web_extract" },
+      { type: EventType.TOOL_CALL_END, toolCallId: "c2" },
+      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "Listo." },
+    ] as unknown as AgUiEvent[];
+
+    const { message } = reduceAgUiAll(events, "m1");
+
+    expect(message.parts).toEqual([
+      { type: "text", text: "Busco. " },
+      { type: "tool", toolId: "c1" },
+      { type: "text", text: "Leo. " },
+      { type: "tool", toolId: "c2" },
+      { type: "text", text: "Listo." },
+    ]);
+    expect(message.content).toBe("Busco. Leo. Listo.");
+  });
+
+  it("sigue entendiendo los eventos plexo.sources ya guardados en run_events", () => {
+    const state = reduceAgUi(initialAgUiState("m1"), {
+      type: EventType.CUSTOM,
+      name: "plexo.sources",
+      value: { sources: [{ id: 1, url: "https://viejo.test", domain: "viejo.test" }] },
+    } as unknown as AgUiEvent);
+
+    expect(state.message.sources).toHaveLength(1);
+    expect(state.message.sources[0]?.domain).toBe("viejo.test");
   });
 
   it("marca error cuando el run falla", () => {
@@ -92,6 +112,58 @@ describe("reduceAgUi", () => {
 
     expect(state.message.status).toBe("error");
     expect(state.message.error).toBe("sin credenciales");
+  });
+
+  it("recoge las preguntas de seguimiento", () => {
+    const { message } = reduceAgUiAll(
+      [
+        {
+          type: EventType.CUSTOM,
+          name: "nexus.followups",
+          value: { questions: ["¿Y en 2025?", "  ", "¿Cuánto cuesta?"] },
+        },
+      ] as unknown as AgUiEvent[],
+      "m1",
+    );
+    expect(message.followups).toEqual(["¿Y en 2025?", "¿Cuánto cuesta?"]);
+  });
+
+  it("una pausa mantiene pendiente la herramienta que espera y la reanudación la libera", () => {
+    const paused = reduceAgUiAll(
+      [
+        { type: EventType.RUN_STARTED, threadId: "t", runId: "r" },
+        { type: EventType.TOOL_CALL_START, toolCallId: "c1", toolCallName: "prompt_openui" },
+        { type: EventType.TOOL_CALL_START, toolCallId: "c2", toolCallName: "web_search" },
+        {
+          type: EventType.RUN_FINISHED,
+          threadId: "t",
+          runId: "r",
+          outcome: {
+            type: "interrupt",
+            interrupts: [{ id: "i1", reason: "openui_form", toolCallId: "c1" }],
+          },
+        },
+      ] as unknown as AgUiEvent[],
+      "m1",
+    );
+
+    const byId = Object.fromEntries(paused.message.tools.map((tool) => [tool.id, tool.status]));
+    expect(byId).toEqual({ c1: "running", c2: "complete" });
+    expect(paused.message.status).toBe("running"); // el mensaje sigue vivo
+    expect(paused.message.interrupts).toHaveLength(1);
+
+    const resumed = reduceAgUi(
+      reduceAgUi(paused, { type: EventType.RUN_STARTED, threadId: "t", runId: "r" } as AgUiEvent),
+      {
+        type: EventType.TOOL_CALL_RESULT,
+        messageId: "x",
+        toolCallId: "c1",
+        content: "{}",
+        role: "tool",
+      } as unknown as AgUiEvent,
+    );
+    expect(resumed.message.interrupts).toEqual([]);
+    expect(resumed.message.tools.find((tool) => tool.id === "c1")?.status).toBe("complete");
   });
 
   it("expone los interrupts de una aprobación pendiente", () => {

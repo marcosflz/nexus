@@ -24,10 +24,23 @@ dist/
 .env.local
 .env*.local
 
-# local hermes data (dev)
+# datos locales del motor retirado (dev)
 .hermes-data/
 
 # logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Sidecar Python
+services/agent/.venv/
+services/agent/.pytest_cache/
+services/agent/.ruff_cache/
+__pycache__/
+*.pyc
+services/sandboxd/.venv/
+services/sandboxd/.pytest_cache/
+services/sandboxd/.ruff_cache/
+services/nexbot/.venv/
+services/nexbot/.pytest_cache/
+services/nexbot/.ruff_cache/
